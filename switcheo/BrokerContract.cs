@@ -5,7 +5,7 @@ using System.Numerics;
 
 namespace switcheo
 {
-    public class Contract1 : Framework.SmartContract
+    public class BrokerContract : SmartContract
     {
         public static void Main()
         {
