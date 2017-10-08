@@ -1,6 +1,8 @@
 ﻿using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
+using Neo.SmartContract.Framework.Services.System;
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace switcheo
@@ -13,8 +15,8 @@ namespace switcheo
             SmartContract = 0x01
         }
 
-        [Appcall("AddRPXScriptHash")] // TODO
-        public static extern object CallRPXContract(string method, byte[] args);
+        [Appcall("1c4f43f942b56ed906dba00b7f3c7ce3da3dd11077532baed900c2cc8c7f247e")] // TODO: Add RPX ScriptHash
+        public static extern object CallRPXContract(string method, params object[] args);
 
         /// <summary>
         ///   This is the Switcheo smart contract entrypoint.
@@ -30,26 +32,22 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
+            if (operation == "queryOffers")
+                return new byte[] { };
+            if (operation == "queryOfferDetails")
+                return new byte[] { };
+            if (operation == "makeOffer")
+                return MakeOffer((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3], (byte[])args[4], (AssetCategory)args[5], (BigInteger)args[6], (byte[])args[7], (byte[])args[8]);
+            if (operation == "fillOffer")
+                return false;
+            if (operation == "cancelOffer")
+                return false;
+            if (operation == "withdrawAssets")
+                return false;
+            if (operation == "freezeContract")
+                return false;
 
-            switch (operation)
-            {
-                case "queryOffers":
-                    return new byte[] { };
-                case "queryOfferDetails":
-                    return new byte[] { };
-                case "makeOffer":
-                    return MakeOffer((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3], (byte[])args[4], (AssetCategory)args[5], (BigInteger)args[6], (byte[])args[7], (byte[])args[8]);
-                case "fillOffer":
-                    return false;
-                case "cancelOffer":
-                    return false;
-                case "withdrawAssets":
-                    return false;
-                case "freezeContract":
-                    return false;
-                default:
-                    return false;
-            }
+            return false;
         }
 
         private static byte[] QueryOffers(byte[] offerAssetID, byte[] offerAssetCategory, byte[] wantAssetID, byte[] wantAssetCategory)
@@ -73,6 +71,9 @@ namespace switcheo
             // Check that the amounts > 0
             if (offerAmount <= 0 || wantAmount <= 0) return false;
 
+            // Check the trade is across different assets
+            if (offerAssetID == wantAssetID && offerAssetCategory == wantAssetCategory) return false;
+
             // Check that nonce is not repeated
             byte[] offerHash = Hash256(
                 makerAddress
@@ -85,24 +86,42 @@ namespace switcheo
                 .Concat(nounce));
             if (Storage.Get(Storage.CurrentContext, offerHash).Length != 0) return false;
 
-            // Take fee?
-
-            TransactionOutput output = new TransactionOutput(); // TODO: how to get the current transaction?
+            // Get current transaction
+            var currentTxn = (Transaction) ExecutionEngine.ScriptContainer;
+            var outputs = currentTxn.GetOutputs();
+            
+            // Verify that the offer really has the indicated assets available
             if (offerAssetCategory == AssetCategory.SystemAsset)
             {
-                // Check the input transaction for the assets
-                if (output.AssetId != offerAssetID || output.Value != offerAmount) return false;
-
+                // Check the current transaction for the system assets
+                TransactionOutput requiredAsset = null;
+                foreach (var o in outputs)
+                {
+                    if (o.AssetId == offerAssetID && o.Value == offerAmount && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                    {
+                        requiredAsset = o;
+                        break;
+                    }
+                }
+                if (requiredAsset == null) return false;
             }
-            else
+            else if (offerAssetCategory == AssetCategory.SmartContract)
             {
                 // Check that no assets were sent by mistake
-                if (output.Value > 0) return false;
+                if (outputs.Length > 0) return false;
 
-                // Check allowance
+                // Check allowance on smart contract
+                BigInteger allowedAmount = (BigInteger) CallRPXContract("allowance", makerAddress, ExecutionEngine.ExecutingScriptHash);
+                if (allowedAmount < offerAmount) return false;
 
                 // Transfer token
-
+                bool transferSuccessful = (bool) CallRPXContract("transferFrom", ExecutionEngine.ExecutingScriptHash, makerAddress, ExecutionEngine.ExecutingScriptHash);
+                if (!transferSuccessful) return false;
+            }
+            else 
+            {
+                // Unknown asset category
+                return false;
             }
 
             // Store the offer maker address and filled amount under the offer hash
@@ -111,17 +130,29 @@ namespace switcheo
             return true;
         }
 
-        private static bool FillOffer(byte[] offerHash, byte[] offerAddress, string amountToFill) // TODO: we can't just send in the offer hash - full offer details are required for doing the token swap
+        private static bool FillOffer(
+            byte[] offerHash, byte[] makerAddress,
+            byte[] offerAssetID, AssetCategory offerAssetCategory,
+            byte[] wantAssetID, AssetCategory wantAssetCategory,
+            BigInteger amountToFill)
         {
+            // Check that the filler is honest
+
+            // Check signature of filler
+
             // Check that the filler is different from the maker
 
             // Check that the offer exists and 0 < amount to fill <= available amount
 
             // Check that the required amounts are sent
 
-            // Move asset to the maker holding 
+            // Check asset precisions to calculate who to take fees from and how much
 
-            // Move asset to the taker holding
+            // Transfer fees
+
+            // Move asset to the maker balance 
+
+            // Move asset to the taker balance
 
             // Update filled amount
 
@@ -149,7 +180,7 @@ namespace switcheo
 
             // Check the signature of the holder
 
-            // Check that there are asset value > 0
+            // Check that there are asset value > 0 in balance
 
             // Transfer asset
 
