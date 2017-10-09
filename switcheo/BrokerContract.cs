@@ -8,7 +8,7 @@ namespace switcheo
     public class BrokerContract : SmartContract
     {
         public static readonly byte[] Owner = { // public key or script hash
-            2, 133, 234, 182, 95, 74, 1, 38, 228, 184, 91, 78, 93, 139, 126, 48, 58, 255, 126, 251, 54, 13, 89, 95, 46, 49, 137, 187, 144, 72, 122, 213, 170 };
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
         public enum AssetCategory : byte
         {
@@ -25,6 +25,7 @@ namespace switcheo
             public byte[] WantAssetID;
             public AssetCategory WantAssetCategory;
             public BigInteger WantAmount;
+            public BigInteger AvailableAmount;
             public byte[] Nonce;
 
             public Offer(
@@ -40,6 +41,7 @@ namespace switcheo
                 WantAssetID = wantAssetID.Take(20);
                 WantAssetCategory = (AssetCategory)wantAssetCategory;
                 WantAmount = BytesToInt(wantAmount);
+                AvailableAmount = BytesToInt(wantAmount);
                 Nonce = nonce.Take(32);
             }
         }
@@ -140,31 +142,33 @@ namespace switcheo
             // Check that nonce is not repeated
             if (Storage.Get(Storage.CurrentContext, offerHash).Length != 0) return false;
 
+            // Check that the offer is valid
+            if (!Validate(offer)) return false;
+
             // Get current transaction
             var currentTxn = (Transaction) ExecutionEngine.ScriptContainer;
-            var outputs = currentTxn.GetOutputs();
+            var outputs = currentTxn.GetReferences();
             
             // Verify that the offer really has the indicated assets available
             if (offer.OfferAssetCategory == AssetCategory.SystemAsset)
             {
                 // Check the current transaction for the system assets
-                TransactionOutput requiredAsset = null;
+                BigInteger sentAmount = 0;
                 foreach (var o in outputs)
                 {
-                    if (o.AssetId == offerAssetID && o.Value == offer.OfferAmount && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                    if (o.AssetId == offerAssetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
                     {
-                        requiredAsset = o;
-                        break;
+                        sentAmount += o.Value;
                     }
                 }
-                if (requiredAsset == null) return false;
+                if (sentAmount != offer.OfferAmount) return false;
             }
             else if (offer.OfferAssetCategory == AssetCategory.SmartContract)
             {
                 // Check that no assets were sent by mistake
                 if (outputs.Length > 0) return false;
 
-                // Do we need to prevent re-entrancy due to external call?
+                // TODO: Do we need to prevent re-entrancy due to external call?
 
                 // Check allowance on smart contract
                 BigInteger allowedAmount = (BigInteger) CallRPXContract("allowance", makerAddress, ExecutionEngine.ExecutingScriptHash);
@@ -201,9 +205,10 @@ namespace switcheo
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
             if (offerData.Length == 0) return false;
             Offer offer = FromBuffer(offerData);
+            var tradingPair = TradingPair(offer);
 
             // Check that 0 < amount to fill <= available amount
-            // if (amountToFill <= 0 || amountToFill > offer.AvailableAmount) return false;
+            if (amountToFill <= 0 || amountToFill > offer.AvailableAmount) return false;
 
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress) return false;
@@ -214,9 +219,7 @@ namespace switcheo
 
             // Check that the required amounts are sent
             
-            // Check asset precisions to calculate who to take fees from and how much
-            
-            // Transfer fees
+            // Check who to take fees from and how much (favor taker fees, unless cannot divide?)
 
             // Move asset to the maker balance 
             byte[] makerKey = offer.MakerAddress.Concat(offer.WantAssetID).Concat(new byte[] { (byte) offer.WantAssetCategory });
@@ -229,8 +232,23 @@ namespace switcheo
             Storage.Put(Storage.CurrentContext, fillerKey, fillerBalance); // TODO: add rate
 
             // Update filled amount
+            offer.AvailableAmount -= amountToFill;
 
             // Remove order if completely filled
+            if (offer.AvailableAmount == 0)
+            {
+                Storage.Delete(Storage.CurrentContext, offerHash);
+                var list = Storage.Get(Storage.CurrentContext, tradingPair);
+                var index = SearchBytes(list, offerHash);
+                if (index >= 0)
+                {
+                    var endIndex = index + offerHash.Length;
+                    var tailCount = list.Length - endIndex;
+                    list = list.Range(0, index).Concat(list.Range(endIndex, tailCount));
+                }
+            }
+
+            // Transfer fees (or just store to feeAddress for use with WithdrawAssets?)
 
             return true;
         }
@@ -248,8 +266,7 @@ namespace switcheo
         private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, byte[] AssetCategory, string withdrawToThisAddress)
         {
             // Check that the holder is honest
-
-            // Check the signature of the holder
+            if (!Runtime.CheckWitness(holderAddress)) return false;
 
             // Check that there are asset value > 0 in balance
 
@@ -285,6 +302,23 @@ namespace switcheo
             return (array[0] << 24) + (array[1] << 16) + (array[2] << 8) + (array[3]) ;
         }
 
+        private static int SearchBytes(byte[] haystack, byte[] needle)
+        {
+            var len = needle.Length;
+            var limit = haystack.Length - len;
+            for (var i = 0; i <= limit; i++)
+            {
+                var k = 0;
+                for (; k < len; k++)
+                {
+                    if (needle[k] != haystack[i + k]) break;
+                }
+                if (k == len) return i;
+            }
+            return -1;
+        }
+
+        // TODO: should we just move this to the main method?
         private static bool Validate(Offer o)
         {
             // Check that the amounts > 0
