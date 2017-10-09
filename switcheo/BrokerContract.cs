@@ -7,6 +7,9 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
+        public static readonly byte[] Owner = { // public key or script hash
+            2, 133, 234, 182, 95, 74, 1, 38, 228, 184, 91, 78, 93, 139, 126, 48, 58, 255, 126, 251, 54, 13, 89, 95, 46, 49, 137, 187, 144, 72, 122, 213, 170 };
+
         public enum AssetCategory : byte
         {
             SystemAsset = 0x00,
@@ -58,40 +61,58 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
-            // Query:
+            if (Runtime.Trigger == TriggerType.Verification)
+            {
+                if (Owner.Length == 20)
+                {
+                    return Runtime.CheckWitness(Owner);
+                }
+                else if (Owner.Length == 33)
+                {
+                    byte[] signature = operation.AsByteArray();
+                    return VerifySignature(signature, Owner);
+                }
+            }
+            else if (Runtime.Trigger == TriggerType.Application)
+            {
+                // Query:
 
-            if (operation == "getOffers")
-                return new byte[] { };
-            if (operation == "getOffer")
-                return new byte[] { };
-            if (operation == "tradingStatus")
-                return "halted";
+                if (operation == "getOffers")
+                    return new byte[] { };
+                if (operation == "getOffer")
+                    return new byte[] { };
+                if (operation == "tradingStatus")
+                    return "halted";
 
-            // Execute:
+                // Execute:
 
-            if (operation == "makeOffer")
-                return MakeOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7], (byte[])args[8]);
-            if (operation == "fillOffer")
-                return false;
-            if (operation == "cancelOffer")
-                return false;
-            if (operation == "withdrawAssets")
-                return false;
+                if (operation == "makeOffer")
+                {
+                    if (args.Length != 7) return false;
+                    return MakeOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7], (byte[])args[8]);
+                }
+                if (operation == "fillOffer")
+                    return false;
+                if (operation == "cancelOffer")
+                    return false;
+                if (operation == "withdrawAssets")
+                    return false;
 
-            // Owner only:
+                // Owner only:
 
-            if (operation == "startTrading")
-                return false;
-            if (operation == "stopTrading") // only can cancel and withdrawl + owner actions
-                return false;
-            if (operation == "freezeContract") // only owner actions
-                return false;
-            if (operation == "unfreezeContract")
-                return false;
-            if (operation == "setFeeAddress")
-                return false;
-            if (operation == "setOwner")
-                return false;
+                if (args.Length < 1 || (byte[])args[0] != Owner) return false;
+
+                if (operation == "startTrading")
+                    return false;
+                if (operation == "stopTrading") // only can cancel and withdrawl + owner actions
+                    return false;
+                if (operation == "freezeContract") // only owner actions
+                    return false;
+                if (operation == "unfreezeContract")
+                    return false;
+                if (operation == "setFeeAddress")
+                    return false;
+            }
 
             return false;
         }
@@ -110,10 +131,7 @@ namespace switcheo
         {
             // Check that the maker is honest
             if (!Runtime.CheckWitness(makerAddress)) return false;
-
-            // Check signature of maker
-            if (!VerifySignature(signature, makerAddress)) return false;
-            
+                        
             // Initialize the offer
             var offer = new Offer(makerAddress, offerAssetID, offerAssetCategory, offerAmount, wantAssetID, wantAssetCategory, wantAmount, nonce);
             var tradingPair = TradingPair(offer);
@@ -146,6 +164,8 @@ namespace switcheo
                 // Check that no assets were sent by mistake
                 if (outputs.Length > 0) return false;
 
+                // Do we need to prevent re-entrancy due to external call?
+
                 // Check allowance on smart contract
                 BigInteger allowedAmount = (BigInteger) CallRPXContract("allowance", makerAddress, ExecutionEngine.ExecutingScriptHash);
                 if (allowedAmount < offer.OfferAmount) return false;
@@ -176,10 +196,7 @@ namespace switcheo
         {
             // Check that the filler is honest
             if (!Runtime.CheckWitness(fillerAddress)) return false;
-
-            // Check signature of filler
-            if (!VerifySignature(signature, fillerAddress)) return false;
-
+            
             // Check that the offer exists and 
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
             if (offerData.Length == 0) return false;
@@ -191,7 +208,9 @@ namespace switcheo
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress) return false;
 
-            // Calculate rate
+            // Calculate amount that can be offered
+            BigInteger amountToOffer = (offer.OfferAmount * amountToFill) / offer.WantAmount;
+            if (amountToOffer == 0) return false;
 
             // Check that the required amounts are sent
             
@@ -220,10 +239,7 @@ namespace switcheo
         {
             // Check that the canceller is honest
             if (!Runtime.CheckWitness(cancellerAddress)) return false;
-
-            // Check signature of canceller
-            if (!VerifySignature(signature, cancellerAddress)) return false;
-
+            
             // Check that the canceller is also the offer maker
 
             return true;
