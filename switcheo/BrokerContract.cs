@@ -198,8 +198,16 @@ namespace switcheo
             // Check that nonce is not repeated
             if (Storage.Get(Storage.CurrentContext, offerHash).Length != 0) return false;
 
-            // Check that the offer is valid
-            if (!Validate(offer)) return false;
+            // Check that the amounts > 0
+            if (offer.OfferAmount <= 0 || offer.WantAmount <= 0) return false;
+
+            // Check that the amounts < 2^(2^32)
+            if (IntToBytes(offer.OfferAmount).Length > 32 || IntToBytes(offer.WantAmount).Length > 32) return false;
+
+            // Check the trade is across different assets
+            if (offer.OfferAssetID == offer.WantAssetID && offer.OfferAssetCategory == offer.WantAssetCategory) return false;
+
+            // TODO: Check that asset IDs are valid
 
             // Get current transaction
             var currentTxn = (Transaction) ExecutionEngine.ScriptContainer;
@@ -231,7 +239,7 @@ namespace switcheo
                 if (allowedAmount < offer.OfferAmount) return false;
 
                 // Transfer token
-                bool transferSuccessful = (bool) CallRPXContract("transferFrom", ExecutionEngine.ExecutingScriptHash, makerAddress, ExecutionEngine.ExecutingScriptHash);
+                bool transferSuccessful = (bool) CallRPXContract("transferFrom", ExecutionEngine.ExecutingScriptHash, makerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
                 if (!transferSuccessful) return false;
             }
             else 
@@ -261,7 +269,6 @@ namespace switcheo
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
             if (offerData.Length == 0) return false;
             Offer offer = FromBuffer(offerData);
-            var tradingPair = TradingPair(offer);
 
             // Check that 0 < amount to fill <= available amount
             if (amountToFill <= 0 || amountToFill > offer.AvailableAmount) return false;
@@ -273,21 +280,37 @@ namespace switcheo
             BigInteger amountToOffer = (offer.OfferAmount * amountToFill) / offer.WantAmount;
             if (amountToOffer == 0) return false;
 
-            // Check that the required amounts are sent
+            // TODO: Check that the required amounts are sent
 
-            // Check who to take fees from and how much (favor taker fees, unless cannot divide?)
+            // Calculate fees
+            BigInteger makerFeeRate = BytesToInt(Storage.Get(Storage.CurrentContext, "makerFee"));
+            BigInteger takerFeeRate = BytesToInt(Storage.Get(Storage.CurrentContext, "takerFee"));
+            BigInteger makerFee = (amountToOffer * makerFeeRate) / feeFactor;
+            BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
 
-            // Move fees to fee address
+            // Move fees
+            if (makerFee > 0)
+            {
+                var storeKey = StoreKey(Owner, offer.WantAssetID, offer.WantAssetCategory);
+                BigInteger balance = BytesToInt(Storage.Get(Storage.CurrentContext, storeKey));
+                Storage.Put(Storage.CurrentContext, storeKey, balance + amountToFill);
+            }
+            if (takerFee > 0)
+            {
+                var storeKey = StoreKey(Owner, offer.OfferAssetID, offer.OfferAssetCategory);
+                BigInteger balance = BytesToInt(Storage.Get(Storage.CurrentContext, storeKey));
+                Storage.Put(Storage.CurrentContext, storeKey, balance + amountToFill);
+            }
 
             // Move asset to the maker balance 
             var makerKey = StoreKey(offer.MakerAddress, offer.WantAssetID, offer.WantAssetCategory);
             BigInteger makerBalance = BytesToInt(Storage.Get(Storage.CurrentContext, makerKey));
-            Storage.Put(Storage.CurrentContext, makerKey, makerBalance + amountToFill); // TODO: use correct fees
+            Storage.Put(Storage.CurrentContext, makerKey, makerBalance + amountToFill - makerFee);
 
             // Move asset to the taker balance
             var fillerKey = StoreKey(fillerAddress, offer.OfferAssetID, offer.OfferAssetCategory);
             BigInteger fillerBalance = BytesToInt(Storage.Get(Storage.CurrentContext, fillerKey));
-            Storage.Put(Storage.CurrentContext, fillerKey, fillerBalance); // TODO: use correct rate and add it
+            Storage.Put(Storage.CurrentContext, fillerKey, fillerBalance + amountToOffer - takerFee);
 
             // Update filled amount
             offer.AvailableAmount -= amountToFill;
@@ -296,6 +319,7 @@ namespace switcheo
             if (offer.AvailableAmount == 0)
             {
                 Storage.Delete(Storage.CurrentContext, offerHash);
+                var tradingPair = TradingPair(offer);
                 var list = Storage.Get(Storage.CurrentContext, tradingPair);
                 var index = SearchBytes(list, offerHash);
                 if (index >= 0)
@@ -341,6 +365,18 @@ namespace switcheo
             if (amount <= 0) return false;
 
             // Transfer asset
+            if (assetCategory == AssetCategory.SystemAsset)
+            {
+                // TODO: this should be allowed/rejected in the validation script instead?
+            }
+            else if (assetCategory == AssetCategory.SmartContract)
+            {
+                // TODO: Do we need to prevent re-entrancy due to external call?
+
+                // Transfer token
+                bool transferSuccessful = (bool) CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
+                if (!transferSuccessful) return false;
+            }
 
             return true;
         }
@@ -353,7 +389,7 @@ namespace switcheo
             Storage.Put(Storage.CurrentContext, "takerFee", takerFee);
             Storage.Put(Storage.CurrentContext, "makerFee", makerFee);
 
-            return true; ;
+            return true;
         }
 
         private static bool SetFeeAddress(byte[] feeAddress)
@@ -405,23 +441,6 @@ namespace switcheo
                 if (k == len) return i;
             }
             return -1;
-        }
-
-        // TODO: should we just move this to the main method?
-        private static bool Validate(Offer o)
-        {
-            // Check that the amounts > 0
-            if (o.OfferAmount <= 0 || o.WantAmount <= 0) return false;
-
-            // Check that the amounts < 2^(2^32)
-
-
-            // Check the trade is across different assets
-            if (o.OfferAssetID == o.WantAssetID && o.OfferAssetCategory == o.WantAssetCategory) return false;
-
-            // Check that asset IDs are valid
-
-            return true;
         }
 
         private static byte[] StoreKey(byte[] owner, byte[] assetID, AssetCategory assetCategory)
