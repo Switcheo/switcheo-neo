@@ -141,12 +141,21 @@ namespace switcheo
                     return MakeOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7], (byte[])args[8]);
                 }
                 if (operation == "fillOffer")
+                {
                     // TODO: check that contract is not inactive
-                    return false;
+                    if (args.Length != 4) return false;
+                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3]);
+                }
                 if (operation == "cancelOffer")
-                    return false;
+                {
+                    if (args.Length != 3) return false;
+                    return CancelOffer((byte[])args[0], (byte[])args[1], (byte[])args[2]);
+                }
                 if (operation == "withdrawAssets")
-                    return false;
+                {
+                    if (args.Length != 4) return false;
+                    return WithdrawAssets((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (byte[])args[3]);
+                }
 
                 // == Owner ==
                 if (args.Length < 1) return false; // TODO: how to verify?
@@ -312,7 +321,7 @@ namespace switcheo
             BigInteger fillerBalance = BytesToInt(Storage.Get(Storage.CurrentContext, fillerKey));
             Storage.Put(Storage.CurrentContext, fillerKey, fillerBalance + amountToOffer - takerFee);
 
-            // Update filled amount
+            // Update available amount
             offer.AvailableAmount -= amountToFill;
 
             // Remove order if completely filled
@@ -328,6 +337,11 @@ namespace switcheo
                     var tailCount = list.Length - endIndex;
                     list = list.Range(0, index).Concat(list.Range(endIndex, tailCount));
                 }
+            }
+            // Store new available amount
+            else
+            {
+                Storage.Put(Storage.CurrentContext, offerHash, ToBuffer(offer));
             }
 
             return true;
@@ -347,15 +361,17 @@ namespace switcheo
             if (offer.MakerAddress != cancellerAddress) return false;
 
             // Move funds to withdrawal address
-            Storage.Put(Storage.CurrentContext, StoreKey(cancellerAddress, offer.OfferAssetID, offer.OfferAssetCategory), offer.AvailableAmount);
+            var storeKey = StoreKey(cancellerAddress, offer.OfferAssetID, offer.OfferAssetCategory);
+            BigInteger balance = BytesToInt(Storage.Get(Storage.CurrentContext, storeKey));
+            Storage.Put(Storage.CurrentContext, storeKey, balance + offer.AvailableAmount);
 
             // Remove offer
             Storage.Delete(Storage.CurrentContext, offerHash);
-                        
+
             return true;
         }
 
-        private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, string withdrawToThisAddress)
+        private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, byte[] withdrawToThisAddress)
         {
             // Check that the holder is honest
             if (!Runtime.CheckWitness(holderAddress)) return false;
