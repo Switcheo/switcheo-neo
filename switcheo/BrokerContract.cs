@@ -35,7 +35,7 @@ namespace switcheo
             NEP5 = 0x01
         }
 
-        private class Offer
+        private struct Offer
         {
             public byte[] MakerAddress;
             public byte[] OfferAssetID;
@@ -46,23 +46,27 @@ namespace switcheo
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
             public byte[] Nonce;
+        }
 
-            public Offer(
-                byte[] makerAddress,
-                byte[] offerAssetID, byte offerAssetCategory, byte[] offerAmount,
-                byte[] wantAssetID, byte wantAssetCategory, byte[] wantAmount,
-                byte[] nonce)
+        private static Offer NewOffer(
+            byte[] makerAddress,
+            byte[] offerAssetID, byte offerAssetCategory, byte[] offerAmount,
+            byte[] wantAssetID, byte wantAssetCategory, byte[] wantAmount,
+            byte[] nonce
+        )
+        {
+            return new Offer
             {
-                MakerAddress = makerAddress.Take(20);
-                OfferAssetID = offerAssetID.Take(20);
-                OfferAssetCategory = (AssetCategory)offerAssetCategory;
-                OfferAmount = offerAmount.AsBigInteger();
-                WantAssetID = wantAssetID.Take(20);
-                WantAssetCategory = (AssetCategory)wantAssetCategory;
-                WantAmount = wantAmount.AsBigInteger();
-                AvailableAmount = wantAmount.AsBigInteger();
-                Nonce = nonce.Take(32);
-            }
+                MakerAddress = makerAddress.Take(20),
+                OfferAssetID = offerAssetID.Take(20),
+                OfferAssetCategory = (AssetCategory)offerAssetCategory,
+                OfferAmount = offerAmount.AsBigInteger(),
+                WantAssetID = wantAssetID.Take(20),
+                WantAssetCategory = (AssetCategory)wantAssetCategory,
+                WantAmount = wantAmount.AsBigInteger(),
+                AvailableAmount = wantAmount.AsBigInteger(),
+                Nonce = nonce.Take(32)
+            };
         }
 
         /// <summary>
@@ -143,7 +147,7 @@ namespace switcheo
             {
                 // TODO: check that contract is not inactive
                 if (args.Length != 7) return false;
-                var offer = new Offer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7]);
+                var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7]);
 
                 if (Runtime.Trigger == TriggerType.Verification) return VerifyOffer(offer);
                 else if (Runtime.Trigger == TriggerType.Application) return MakeOffer(offer);
@@ -207,7 +211,7 @@ namespace switcheo
 
             // Check that the amounts < 2^(2^32)
             // TODO: optimize this check
-            if (offer.OfferAmount.ToByteArray().Length > 32 || offer.WantAmount.ToByteArray().Length > 32) return false;
+            if (ToBytes(offer.OfferAmount).Length > 32 || ToBytes(offer.WantAmount).Length > 32) return false;
 
             // Check the trade is across different assets
             // TODO: should we bother checking this?
@@ -301,7 +305,7 @@ namespace switcheo
             Storage.Put(Storage.CurrentContext, fillerKey, fillerBalance + amountToOffer - takerFee);
 
             // Update available amount
-            offer.AvailableAmount -= amountToFill;
+            offer.AvailableAmount = offer.AvailableAmount - amountToFill;
 
             // Remove order if completely filled
             if (offer.AvailableAmount == 0)
@@ -424,6 +428,12 @@ namespace switcheo
             }
         }
 
+        private static byte[] ToBytes(BigInteger value)
+        {
+            byte[] buffer = value.ToByteArray();
+            return buffer;
+        }
+
         private static byte[] Int32ToBytes(int value)
         {
             return new byte[] {
@@ -475,9 +485,9 @@ namespace switcheo
 
         private static byte[] ToBuffer(Offer o)
         {
-            byte[] offerAmountBuffer = o.OfferAmount.ToByteArray();
+            byte[] offerAmountBuffer = ToBytes(o.OfferAmount);
             byte[] offerAmountBufferLength = Int32ToBytes(offerAmountBuffer.Length);
-            byte[] wantAmountBuffer = o.WantAmount.ToByteArray();
+            byte[] wantAmountBuffer = ToBytes(o.WantAmount);
             byte[] wantAmountBufferLength = Int32ToBytes(wantAmountBuffer.Length);
             return o.MakerAddress
                 .Concat(TradingPair(o))
@@ -492,7 +502,7 @@ namespace switcheo
         {
             int offerAmountBufferLength = BytesToInt32(buffer.Range(62, 4));
             int wantAmountBufferLength = BytesToInt32(buffer.Range(66 + offerAmountBufferLength, 4));
-            return new Offer(
+            return NewOffer(
                 buffer.Range(0, 20), // Maker Address
                 buffer.Range(20, 20), buffer[40], buffer.Range(66, offerAmountBufferLength), // Offer AssetID, Category, Amount
                 buffer.Range(41, 20), buffer[61], buffer.Range(70 + offerAmountBufferLength, wantAmountBufferLength), // Want AssetID, Category, Amount
