@@ -18,13 +18,12 @@ namespace switcheo
         [DisplayName("refunded")]
         public static event Action<byte[], BigInteger> Refunded; // TODO: use me
 
-        private static readonly byte[] Owner = { // public key or script hash
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
         private const ulong feeFactor = 100000; // 1 => 0.001%
         private const int maxFee = 3000; // 3000/10000 = 0.3%
 
         // Contract States
-        private static byte[] Pending = { };          // only can initialize
+        private static byte[] Pending = { };         // only can initialize
         private static byte[] Active = { 0x01 };     // all operations active
         private static byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawl & owner actions
 
@@ -72,10 +71,10 @@ namespace switcheo
         /// <summary>
         ///   This is the Switcheo smart contract entrypoint.
         /// 
-        ///   Parameter List: 0705
+        ///   Parameter List: 0710
         ///   Return List: 05
         /// </summary>
-        /// <param name="method">
+        /// <param name="operation">
         ///   The method to be invoked.
         /// </param>
         /// <param name="args">
@@ -102,18 +101,13 @@ namespace switcheo
             // == Init ==
             if (operation == "initialize")
             {
-                // TODO: check owner
-                if (Storage.Get(Storage.CurrentContext, "state") != Pending) return false;
-
-                if (args.Length != 3) return false;
-                if (!SetFees((BigInteger)args[0], (BigInteger)args[1])) return false;
-                if (!SetFeeAddress((byte[])args[2])) return false;
-
-                Storage.Put(Storage.CurrentContext, "state", Active);
-                return true;
+                if (args.Length != 4) return false;
+                if (!Runtime.CheckWitness((byte[])args[0])) return false;
+                return Initialize((byte[])args[0], (BigInteger)args[1], (BigInteger)args[2], (byte[])args[3]);
             }
 
             // TODO: check that contract has been initialized
+
             // == Query ==
             if (operation == "getOffers")
                 return new byte[0]; // TODO
@@ -145,7 +139,7 @@ namespace switcheo
 
             if (operation == "makeOffer")
             {
-                // TODO: check that contract is not inactive
+                if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
                 if (args.Length != 7) return false;
                 var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7]);
 
@@ -155,14 +149,14 @@ namespace switcheo
             }
             if (operation == "fillOffer")
             {
-                // TODO: check that contract is not inactive
+                if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
                 if (args.Length != 4) return false;
-                return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3]);
+                return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
             }
             if (operation == "cancelOffer")
             {
                 if (args.Length != 3) return false;
-                return CancelOffer((byte[])args[0], (byte[])args[1], (byte[])args[2]);
+                return CancelOffer((byte[])args[0], (byte[])args[1]);
             }
             if (operation == "withdrawAssets")
             {
@@ -171,7 +165,10 @@ namespace switcheo
             }
 
             // == Owner ==
-            if (args.Length < 1) return false; // TODO: how to verify?
+
+            // Check that originator is the owner
+            if ((byte[])args[0] != Owner) return false;
+
             if (operation == "freezeTrading")
             {
                 Storage.Put(Storage.CurrentContext, "state", Inactive);
@@ -185,15 +182,26 @@ namespace switcheo
             if (operation == "setFees")
             {
                 if (args.Length != 2) return false;
-                return SetFees((BigInteger)args[0], (BigInteger)args[1]);
+                return SetFees((BigInteger)args[1], (BigInteger)args[2]);
             }
             if (operation == "setFeeAddress")
             {
                 if (args.Length != 1) return false;
-                return SetFeeAddress((byte[])args[0]);
+                return SetFeeAddress((byte[])args[1]);
             }
 
             return false;
+        }
+
+        private static bool Initialize(byte[] originator, BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
+        {
+            if (originator != Owner) return false;
+            if (Storage.Get(Storage.CurrentContext, "state") != Pending) return false;
+            if (!SetFees(takerFee, makerFee)) return false;
+            if (!SetFeeAddress(feeAddress)) return false;
+
+            Storage.Put(Storage.CurrentContext, "state", Active);
+            return true;
         }
 
         private static byte[] GetOffers(byte[] offerAssetID, byte[] offerAssetCategory, byte[] wantAssetID, byte[] wantAssetCategory)
@@ -250,9 +258,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool FillOffer(
-            byte[] fillerAddress, byte[] offerHash,
-            BigInteger amountToFill, byte[] signature)
+        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
         {
             // Check that the offer exists 
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
@@ -322,7 +328,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool CancelOffer(byte[] cancellerAddress, byte[] offerHash, byte[] signature)
+        private static bool CancelOffer(byte[] cancellerAddress, byte[] offerHash)
         {
             // Check that the offer exists
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
@@ -358,8 +364,7 @@ namespace switcheo
             else if (assetCategory == AssetCategory.NEP5)
             {
                 // Transfer token
-                // TODO: Do we need to prevent re-entrancy due to external call?
-                bool transferSuccessful = (bool) CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
+                bool transferSuccessful = (bool)CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, withdrawToThisAddress, amount);
                 if (!transferSuccessful) return false;
             }
 
@@ -406,8 +411,7 @@ namespace switcheo
             else if (assetCategory == AssetCategory.NEP5)
             {
                 // Check allowance on smart contract
-                // TODO: Do we need to prevent re-entrancy due to external call?
-                BigInteger allowedAmount = (BigInteger) CallRPXContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
+                BigInteger allowedAmount = (BigInteger)CallRPXContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
                 if (allowedAmount < amount) return false;
             }
 
@@ -446,7 +450,7 @@ namespace switcheo
 
         private static int BytesToInt32(byte[] array)
         {
-            return (array[0] << 24) + (array[1] << 16) + (array[2] << 8) + (array[3]) ;
+            return (array[0] << 24) + (array[1] << 16) + (array[2] << 8) + (array[3]);
         }
 
         private static int SearchBytes(byte[] haystack, byte[] needle)
@@ -467,15 +471,15 @@ namespace switcheo
 
         private static byte[] StoreKey(byte[] owner, byte[] assetID, AssetCategory assetCategory)
         {
-            return owner.Concat(assetID).Concat(new byte[] { (byte) assetCategory });
+            return owner.Concat(assetID).Concat(new byte[] { (byte)assetCategory });
         }
 
         private static byte[] TradingPair(Offer o) // 42 bytes
         {
             return o.OfferAssetID.
-                Concat(new byte[] { (byte) o.OfferAssetCategory }).
+                Concat(new byte[] { (byte)o.OfferAssetCategory }).
                 Concat(o.WantAssetID).
-                Concat(new byte[] { (byte) o.WantAssetCategory });
+                Concat(new byte[] { (byte)o.WantAssetCategory });
         }
 
         private static byte[] Hash(Offer o)
