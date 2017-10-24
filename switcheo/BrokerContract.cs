@@ -12,11 +12,17 @@ namespace switcheo
         [Appcall("1c4f43f942b56ed906dba00b7f3c7ce3da3dd11077532baed900c2cc8c7f247e")] // TODO: Add RPX ScriptHash - or find workaround to call arbitrary contract
         public static extern object CallRPXContract(string method, params object[] args);
 
-        [DisplayName("filled")]
-        public static event Action<byte[], byte[], BigInteger> Filled; // TODO: use me
+        [DisplayName("created")]
+        public static event Action<byte[]> Created; // TODO: use me (offerHash)
 
-        [DisplayName("refunded")]
-        public static event Action<byte[], BigInteger> Refunded; // TODO: use me
+        [DisplayName("filled")]
+        public static event Action<byte[], BigInteger> Filled; // TODO: use me (offerHash, amount)
+        
+        [DisplayName("transferred")]
+        public static event Action<byte[], byte[], byte, BigInteger> Transferred; // TODO: use me (account, assetID, assetCategory, amount)
+
+        [DisplayName("withdrawn")]
+        public static event Action<byte[], byte[], byte, BigInteger> Withdrawn; // TODO: use me (account, assetID, assetCategory, amount)
 
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
         private const ulong feeFactor = 100000; // 1 => 0.001%
