@@ -104,11 +104,22 @@ namespace switcheo
 
             // Check that contract has been initialized
             if (Storage.Get(Storage.CurrentContext, "state") == Pending) return false;
-
+            
+            // TODO: do we need all these helper methods? client can query contract storage directly!
             if (operation == "getOffers")
-                return new byte[0]; // TODO
+            {
+                if (args.Length != 4) return false;
+                var key = ((byte[])args[0]).
+                    Concat(new byte[] { (byte)args[1] }).
+                    Concat((byte[])args[2]).
+                    Concat(new byte[] { (byte)args[3] });
+                return Storage.Get(Storage.CurrentContext, key);
+            }
             if (operation == "getOffer")
-                return new byte[0]; // TODO
+            {
+                if (args.Length != 1) return false;
+                return Storage.Get(Storage.CurrentContext, (byte[]) args[0]);
+            }
             if (operation == "tradingStatus")
                 return Storage.Get(Storage.CurrentContext, "state");
             if (operation == "getMakerFee")
