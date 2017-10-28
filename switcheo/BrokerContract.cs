@@ -174,8 +174,11 @@ namespace switcheo
             }
             if (operation == "withdrawAssets")
             {
-                if (args.Length != 4) return false;
-                return WithdrawAssets((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (byte[])args[3]);
+                if (args.Length != 5) return false;
+
+                if (Runtime.Trigger == TriggerType.Verification) return VerifyWithdrawal((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3], (byte[])args[4]);
+                else if (Runtime.Trigger == TriggerType.Application) return WithdrawAssets((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3], (byte[])args[4]);
+                return false;
             }
 
 
@@ -365,27 +368,44 @@ namespace switcheo
             return true;
         }
 
-        private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, byte[] withdrawToThisAddress)
+        private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, BigInteger amount, byte[] withdrawToThisAddress)
         {
             // Check that there are asset value > 0 in balance
             var key = StoreKey(holderAddress, assetID, assetCategory);
-            var amount = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
-            if (amount <= 0) return false;
+            var balance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
+            if (balance < amount) return false;
 
-            // Transfer asset
+            // Check that the transaction outputs matches the specified amount
             if (assetCategory == AssetCategory.SystemAsset)
             {
-                // TODO: this should be allowed/rejected in the validation script instead?
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                var outputs = currentTxn.GetReferences();
+                BigInteger withdrawAmount = 0;
+                foreach (var o in outputs)
+                {
+                    if (o.AssetId == assetID && o.ScriptHash == withdrawToThisAddress) withdrawAmount += o.Value;
+                    else return false; // Only allow withdrawing the specified asset and destination
+                }
+                if (withdrawAmount != amount) return false;
             }
-            else if (assetCategory == AssetCategory.NEP5)
+
+            return true;
+        }
+
+        private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, BigInteger amount, byte[] withdrawToThisAddress)
+        {
+            if (assetCategory == AssetCategory.NEP5)
             {
                 // Transfer token
                 bool transferSuccessful = (bool)CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, withdrawToThisAddress, amount);
                 if (!transferSuccessful) return false;
             }
 
-            // Remove balance
-            Storage.Delete(Storage.CurrentContext, key);
+            // Reduce balance
+            var key = StoreKey(holderAddress, assetID, assetCategory);
+            var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
+            if (currentBalance - amount > 0 ) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
+            else Storage.Delete(Storage.CurrentContext, key);
 
             // Notify runtime
             //Withdrawn(holderAddress, assetID, (byte)assetCategory, amount);
@@ -422,10 +442,7 @@ namespace switcheo
                 BigInteger sentAmount = 0;
                 foreach (var o in outputs)
                 {
-                    if (o.AssetId == assetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
-                    {
-                        sentAmount += o.Value;
-                    }
+                    if (o.AssetId == assetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash) sentAmount += o.Value;
                 }
                 if (sentAmount != amount) return false;
             }
