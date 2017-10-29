@@ -94,9 +94,15 @@ namespace switcheo
             // == Init ==
             if (operation == "initialize")
             {
-                if (args.Length != 4) return false;
-                if (!Runtime.CheckWitness((byte[])args[0])) return false;
-                return Initialize((byte[])args[0], (BigInteger)args[1], (BigInteger)args[2], (byte[])args[3]);
+                if (Runtime.Trigger == TriggerType.Verification)
+                {
+                    if (!Runtime.CheckWitness((byte[])args[0])) return false;
+                }
+                else if (Runtime.Trigger == TriggerType.Application)
+                {
+                    if (args.Length != 4) return false;
+                    return Initialize((byte[])args[0], (BigInteger)args[1], (BigInteger)args[2], (byte[])args[3]);
+                }                
             }
 
 
