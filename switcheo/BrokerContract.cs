@@ -95,13 +95,17 @@ namespace switcheo
             if (operation == "initialize")
             {
                 if (Runtime.Trigger == TriggerType.Verification)
-                {
-                    if (!Runtime.CheckWitness((byte[])args[0])) return false;
+                {                    
+                    if (!Runtime.CheckWitness(Owner))
+                    {
+                        Runtime.Log("Owner signature verification failed");
+                        return false;
+                    }
                 }
                 else if (Runtime.Trigger == TriggerType.Application)
                 {
-                    if (args.Length != 4) return false;
-                    return Initialize((byte[])args[0], (BigInteger)args[1], (BigInteger)args[2], (byte[])args[3]);
+                    if (args.Length != 3) return false;
+                    return Initialize((BigInteger)args[0], (BigInteger)args[1], (byte[])args[2]);
                 }                
             }
 
@@ -109,7 +113,7 @@ namespace switcheo
             // == Query ==
 
             // Check that contract has been initialized
-            if (Storage.Get(Storage.CurrentContext, "state") == Pending) return false;
+            if (Storage.Get(Storage.CurrentContext, "state").Length == 0) return false;
             
             // TODO: do we need all these helper methods? client can query contract storage directly!
             if (operation == "getOffers")
@@ -135,25 +139,7 @@ namespace switcheo
 
 
             // == Execute ==
-
-            // Check that the originator is honest
-            if (Runtime.Trigger == TriggerType.Verification)
-            {
-                // TODO: is this right?
-                if (!Runtime.CheckWitness((byte[])args[0])) return false;
-
-                // What does this sample code mean? :
-                //    if (Owner.Length == 20)
-                //    {
-                //        return Runtime.CheckWitness(Owner);
-                //    }
-                //    else if (Owner.Length == 33)
-                //    {
-                //        byte[] signature = operation.AsByteArray();
-                //        return VerifySignature(signature, Owner);
-                //    }
-            }
-
+            
             if (operation == "makeOffer")
             {
                 if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
@@ -187,13 +173,15 @@ namespace switcheo
                 return false;
             }
 
-
             // == Owner ==
 
             if (Runtime.Trigger == TriggerType.Verification)
             {
-                // Check that originator is the owner
-                return (byte[])args[0] == Owner;
+                if (!Runtime.CheckWitness(Owner))
+                {
+                    Runtime.Log("Owner signature verification failed");
+                    return false;
+                }
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
@@ -210,25 +198,26 @@ namespace switcheo
                 if (operation == "setFees")
                 {
                     if (args.Length != 2) return false;
-                    return SetFees((BigInteger)args[1], (BigInteger)args[2]);
+                    return SetFees((BigInteger)args[0], (BigInteger)args[1]);
                 }
                 if (operation == "setFeeAddress")
                 {
                     if (args.Length != 1) return false;
-                    return SetFeeAddress((byte[])args[1]);
+                    return SetFeeAddress((byte[])args[0]);
                 }
             }
 
             return false;
         }
 
-        private static bool Initialize(byte[] originator, BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
+        private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
         {
-            if (originator != Owner) return false;
+            Runtime.Log("Checking state...");
             if (Storage.Get(Storage.CurrentContext, "state") != Pending) return false;
             if (!SetFees(takerFee, makerFee)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
 
+            Runtime.Log("Initialized!");
             Storage.Put(Storage.CurrentContext, "state", Active);
             return true;
         }
@@ -240,6 +229,9 @@ namespace switcheo
 
         private static bool VerifyOffer(Offer offer)
         {
+            // Check that transaction is signed by the maker
+            if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
+
             // Check that nonce is not repeated
             if (Storage.Get(Storage.CurrentContext, Hash(offer)).Length != 0) return false;
 
@@ -289,6 +281,9 @@ namespace switcheo
 
         private static bool VerifyFill(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
         {
+            // Check that transaction is signed by the filler
+            if (!Runtime.CheckWitness(fillerAddress)) return false;
+
             // Check that the offer exists 
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
             if (offerData.Length == 0) return false;
@@ -352,6 +347,9 @@ namespace switcheo
 
         private static bool CancelOffer(byte[] cancellerAddress, byte[] offerHash)
         {
+            // Check that transaction is signed by the canceller
+            if (Runtime.Trigger == TriggerType.Verification) return Runtime.CheckWitness(cancellerAddress);
+
             // Check that the offer exists
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
             if (offerData.Length == 0) return false;
@@ -376,6 +374,9 @@ namespace switcheo
 
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, BigInteger amount, byte[] withdrawToThisAddress)
         {
+            // Check that transaction is signed by the holder
+            if (!Runtime.CheckWitness(holderAddress)) return false;
+
             // Check that there are asset value > 0 in balance
             var key = StoreKey(holderAddress, assetID, assetCategory);
             var balance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
@@ -420,6 +421,7 @@ namespace switcheo
 
         private static bool SetFees(BigInteger takerFee, BigInteger makerFee)
         {
+            Runtime.Log("Setting fees...");
             if (takerFee > maxFee || makerFee > maxFee) return false;
             if (takerFee < 0 || makerFee < 0) return false;
 
@@ -431,6 +433,7 @@ namespace switcheo
 
         private static bool SetFeeAddress(byte[] feeAddress)
         {
+            Runtime.Log("Setting fee address...");
             if (feeAddress.Length != 20) return false;
             Storage.Put(Storage.CurrentContext, "feeAddress", feeAddress);
 
