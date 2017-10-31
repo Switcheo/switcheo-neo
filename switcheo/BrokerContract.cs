@@ -32,9 +32,10 @@ namespace switcheo
         private const int maxFee = 3000; // 3000/10000 = 0.3%
 
         // Contract States
-        private static byte[] Pending = { };         // only can initialize
-        private static byte[] Active = { 0x01 };     // all operations active
-        private static byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawl & owner actions
+        private static readonly byte[] Pending = { };         // only can initialize
+        private static readonly byte[] Active = { 0x01 };     // all operations active
+        private static readonly byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawl & owner actions
+        private static readonly byte[] Yes = { 0x01 };
 
         // TODO: do we need an enum? we can just do `private static byte SystemAsset = 0x00` instead?
         private enum AssetCategory : byte
@@ -91,100 +92,128 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
-            // == Init ==
-            if (operation == "initialize")
+            if (Runtime.Trigger == TriggerType.Verification)
             {
-                if (Runtime.Trigger == TriggerType.Verification)
-                {                    
+                // == Withdrawal of SystemAsset ==
+                // Check that the TransactionAttribute has been set to signify deduction during Application phase
+                if (!WithdrawingSystemAsset()) return false;
+
+                // Verify that each output is allowed
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                var outputs = currentTxn.GetOutputs();
+                foreach (var o in outputs)
+                {
+                    if (!VerifyWithdrawal(o.ScriptHash, o.AssetId, AssetCategory.SystemAsset, o.Value)) return false;
+                }
+            }
+            else if (Runtime.Trigger == TriggerType.Application)
+            {
+                // == Withdrawal of SystemAsset ==
+                if (WithdrawingSystemAsset())
+                {
+                    var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                    var outputs = currentTxn.GetOutputs();
+                    foreach (var o in outputs)
+                    {
+                        ReduceBalance(o.ScriptHash, o.AssetId, AssetCategory.SystemAsset, o.Value);
+                    }
+                    return true;
+                }
+
+                // == Init ==
+                if (operation == "initialize")
+                {
                     if (!Runtime.CheckWitness(Owner))
                     {
                         Runtime.Log("Owner signature verification failed");
                         return false;
                     }
-                }
-                else if (Runtime.Trigger == TriggerType.Application)
-                {
                     if (args.Length != 3) return false;
                     return Initialize((BigInteger)args[0], (BigInteger)args[1], (byte[])args[2]);
-                }                
-            }
+                }
+
+                // == Query ==
+                // TODO: do we need all these helper methods? client can query contract storage directly!
+                // Check that contract has been initialized
+                if (Storage.Get(Storage.CurrentContext, "state").Length == 0) return false;
+                if (operation == "getOffers")
+                {
+                    if (args.Length != 4) return false;
+                    var key = ((byte[])args[0]).
+                        Concat(new byte[] { (byte)args[1] }).
+                        Concat((byte[])args[2]).
+                        Concat(new byte[] { (byte)args[3] });
+                    return Storage.Get(Storage.CurrentContext, key);
+                }
+                if (operation == "getOffer")
+                {
+                    if (args.Length != 1) return false;
+                    return Storage.Get(Storage.CurrentContext, (byte[])args[0]);
+                }
+                if (operation == "tradingStatus")
+                    return Storage.Get(Storage.CurrentContext, "state");
+                if (operation == "getMakerFee")
+                    return Storage.Get(Storage.CurrentContext, "makerFee");
+                if (operation == "getTakerFee")
+                    return Storage.Get(Storage.CurrentContext, "takerFee");
+
+                // == Execute ==
+                if (operation == "makeOffer")
+                {
+                    if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
+                    if (args.Length != 7) return false;
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7]);
+
+                    if (VerifyOffer(offer))
+                    {
+                        return MakeOffer(offer);
+                    }
+                    else
+                    {
+                        Runtime.Log("Offer is invalid!");
+                        // TODO: RefundAllInputs()
+                    }
+                }
+                if (operation == "fillOffer")
+                {
+                    if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
+                    if (args.Length != 3) return false;
+
+                    if (VerifyFill((byte[])args[0], (byte[])args[1], (BigInteger)args[2]))
+                    {
+                        return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                    }
+                    else
+                    {
+                        Runtime.Log("Fill is invalid!");
+                        // TODO: RefundAllInputs()
+                    }
+                }
+                if (operation == "cancelOffer")
+                {
+                    if (args.Length != 1) return false;
+                    return CancelOffer((byte[])args[0]);
+                }
+                if (operation == "withdrawAssets") // NEP-5 only
+                {
+                    if (args.Length != 4) return false;
+                    if (VerifyWithdrawal((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3]))
+                    {
+                        return WithdrawAssets((byte[])args[0], (byte[])args[1], (BigInteger)args[3]);
+                    }
+                    else
+                    {
+                        Runtime.Log("Withdrawal is invalid!");
+                    }
+                }
 
 
-            // == Query ==
-
-            // Check that contract has been initialized
-            if (Storage.Get(Storage.CurrentContext, "state").Length == 0) return false;
-            
-            // TODO: do we need all these helper methods? client can query contract storage directly!
-            if (operation == "getOffers")
-            {
-                if (args.Length != 4) return false;
-                var key = ((byte[])args[0]).
-                    Concat(new byte[] { (byte)args[1] }).
-                    Concat((byte[])args[2]).
-                    Concat(new byte[] { (byte)args[3] });
-                return Storage.Get(Storage.CurrentContext, key);
-            }
-            if (operation == "getOffer")
-            {
-                if (args.Length != 1) return false;
-                return Storage.Get(Storage.CurrentContext, (byte[]) args[0]);
-            }
-            if (operation == "tradingStatus")
-                return Storage.Get(Storage.CurrentContext, "state");
-            if (operation == "getMakerFee")
-                return Storage.Get(Storage.CurrentContext, "makerFee");
-            if (operation == "getTakerFee")
-                return Storage.Get(Storage.CurrentContext, "takerFee");
-
-
-            // == Execute ==
-            
-            if (operation == "makeOffer")
-            {
-                if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
-                if (args.Length != 7) return false;
-                var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte)args[2], (byte[])args[3], (byte[])args[4], (byte)args[5], (byte[])args[6], (byte[])args[7]);
-
-                if (Runtime.Trigger == TriggerType.Verification) return VerifyOffer(offer);
-                else if (Runtime.Trigger == TriggerType.Application) return MakeOffer(offer);
-                return false;
-            }
-            if (operation == "fillOffer")
-            {
-                if (Storage.Get(Storage.CurrentContext, "state") == Inactive) return false;
-                if (args.Length != 3) return false;
-
-                if (Runtime.Trigger == TriggerType.Verification) return VerifyFill((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
-                else if (Runtime.Trigger == TriggerType.Application) return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
-                return false;
-            }
-            if (operation == "cancelOffer")
-            {
-                if (args.Length != 2) return false;
-                return CancelOffer((byte[])args[0], (byte[])args[1]);
-            }
-            if (operation == "withdrawAssets")
-            {
-                if (args.Length != 5) return false;
-
-                if (Runtime.Trigger == TriggerType.Verification) return VerifyWithdrawal((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3], (byte[])args[4]);
-                else if (Runtime.Trigger == TriggerType.Application) return WithdrawAssets((byte[])args[0], (byte[])args[1], (AssetCategory)args[2], (BigInteger)args[3], (byte[])args[4]);
-                return false;
-            }
-
-            // == Owner ==
-
-            if (Runtime.Trigger == TriggerType.Verification)
-            {
+                // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
                 {
                     Runtime.Log("Owner signature verification failed");
                     return false;
                 }
-            }
-            else if (Runtime.Trigger == TriggerType.Application)
-            {
                 if (operation == "freezeTrading")
                 {
                     Storage.Put(Storage.CurrentContext, "state", Inactive);
@@ -345,21 +374,18 @@ namespace switcheo
             return true;
         }
 
-        private static bool CancelOffer(byte[] cancellerAddress, byte[] offerHash)
+        private static bool CancelOffer(byte[] offerHash)
         {
-            // Check that transaction is signed by the canceller
-            if (Runtime.Trigger == TriggerType.Verification) return Runtime.CheckWitness(cancellerAddress);
-
             // Check that the offer exists
             byte[] offerData = Storage.Get(Storage.CurrentContext, offerHash);
             if (offerData.Length == 0) return false;
             Offer offer = FromBuffer(offerData);
 
-            // Check that the canceller is also the offer maker
-            if (offer.MakerAddress != cancellerAddress) return false;
+            // Check that transaction is signed by the canceller
+            if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Move funds to withdrawal address
-            var storeKey = StoreKey(cancellerAddress, offer.OfferAssetID, offer.OfferAssetCategory);
+            var storeKey = StoreKey(offer.MakerAddress, offer.OfferAssetID, offer.OfferAssetCategory);
             BigInteger balance = Storage.Get(Storage.CurrentContext, storeKey).AsBigInteger();
             Storage.Put(Storage.CurrentContext, storeKey, balance + offer.AvailableAmount);
 
@@ -371,8 +397,8 @@ namespace switcheo
             Cancelled(offerHash);
             return true;
         }
-
-        private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, BigInteger amount, byte[] withdrawToThisAddress)
+        
+        private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, BigInteger amount)
         {
             // Check that transaction is signed by the holder
             if (!Runtime.CheckWitness(holderAddress)) return false;
@@ -382,40 +408,18 @@ namespace switcheo
             var balance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             if (balance < amount) return false;
 
-            // Check that the transaction outputs matches the specified amount
-            if (assetCategory == AssetCategory.SystemAsset)
-            {
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                var outputs = currentTxn.GetReferences();
-                BigInteger withdrawAmount = 0;
-                foreach (var o in outputs)
-                {
-                    if (o.AssetId == assetID && o.ScriptHash == withdrawToThisAddress) withdrawAmount += o.Value;
-                    else return false; // Only allow withdrawing the specified asset and destination
-                }
-                if (withdrawAmount != amount) return false;
-            }
-
             return true;
         }
 
-        private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, AssetCategory assetCategory, BigInteger amount, byte[] withdrawToThisAddress)
+        private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
-            if (assetCategory == AssetCategory.NEP5)
-            {
-                // Transfer token
-                bool transferSuccessful = (bool)CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, withdrawToThisAddress, amount);
-                if (!transferSuccessful) return false;
-            }
+            // Transfer token
+            // TODO: how do we pass Runtime.CheckWitness(ourScriptHash) on NEP5 contract?
+            bool transferSuccessful = (bool)CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
+            if (!transferSuccessful) return false;
 
-            // Reduce balance
-            var key = StoreKey(holderAddress, assetID, assetCategory);
-            var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
-            if (currentBalance - amount > 0 ) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
-            else Storage.Delete(Storage.CurrentContext, key);
+            ReduceBalance(holderAddress, assetID, AssetCategory.NEP5, amount);
 
-            // Notify runtime
-            //Withdrawn(holderAddress, assetID, (byte)assetCategory, amount);
             return true;
         }
 
@@ -479,6 +483,17 @@ namespace switcheo
             }
         }
 
+        private static bool WithdrawingSystemAsset()
+        {
+            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            var txnAttributes = currentTxn.GetAttributes();
+            foreach (var attr in txnAttributes)
+            {
+                if (attr.Usage == 0xa1 && attr.Data == Yes) return true;
+            }
+            return false;
+        }
+
         private static void TransferAssetTo(byte[] address, byte[] assetID, AssetCategory assetCategory, BigInteger amount)
         {
             if (amount <= 0) return;
@@ -486,6 +501,19 @@ namespace switcheo
             byte[] key = StoreKey(address, assetID, assetCategory);
             BigInteger currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             Storage.Put(Storage.CurrentContext, key, currentBalance + amount);
+        }
+
+        private static void ReduceBalance(byte[] address, byte[] assetID, AssetCategory assetCategory, BigInteger amount)
+        {
+            if (amount <= 0) return;
+
+            var key = StoreKey(address, assetID, assetCategory);
+            var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
+            if (currentBalance - amount > 0) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
+            else Storage.Delete(Storage.CurrentContext, key);
+
+            // Notify runtime
+            //Withdrawn(holderAddress, assetID, (byte)assetCategory, amount);
         }
 
         private static byte[] ToBytes(BigInteger value)
@@ -525,6 +553,7 @@ namespace switcheo
             return -1;
         }
 
+        // TODO: we can probably omit assetCategory.
         private static byte[] StoreKey(byte[] owner, byte[] assetID, AssetCategory assetCategory)
         {
             return owner.Concat(assetID).Concat(new byte[] { (byte)assetCategory });
