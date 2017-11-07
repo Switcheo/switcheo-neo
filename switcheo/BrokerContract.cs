@@ -654,6 +654,7 @@ namespace switcheo
 
         private static byte[] TradingPair(Offer o) // 42 bytes
         {
+            Runtime.Log("Deriving trading pair..");
             return o.OfferAssetID.
                 Concat(new byte[] { (byte)o.OfferAssetCategory }).
                 Concat(o.WantAssetID).
@@ -662,11 +663,13 @@ namespace switcheo
 
         private static byte[] Hash(Offer o)
         {
+            Runtime.Log("Calculating offer hash..");
             return Hash256(ToBuffer(o));
         }
 
         private static byte[] ToBuffer(Offer o)
         {
+            Runtime.Log("Serializing offer..");
             byte[] offerAmountBuffer = ToBytes(o.OfferAmount);
             byte[] offerAmountBufferLength = Int32ToBytes(offerAmountBuffer.Length);
             byte[] wantAmountBuffer = ToBytes(o.WantAmount);
@@ -683,6 +686,7 @@ namespace switcheo
         // TODO: test this!
         private static Offer FromBuffer(byte[] buffer)
         {
+            Runtime.Log("Deserializing buffer..");
             int offerAmountBufferLength = BytesToInt32(buffer.Range(62, 4));
             int wantAmountBufferLength = BytesToInt32(buffer.Range(66 + offerAmountBufferLength, 4));
             return NewOffer(
