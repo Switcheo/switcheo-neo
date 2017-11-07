@@ -12,20 +12,20 @@ namespace switcheo
         [Appcall("1c4f43f942b56ed906dba00b7f3c7ce3da3dd11077532baed900c2cc8c7f247e")] // TODO: Add RPX ScriptHash - or find workaround to call arbitrary contract
         public static extern object CallRPXContract(string method, params object[] args);
 
-        [DisplayName("created")]
-        public static event Action<byte[]> Created; // (offerHash)
+        //[DisplayName("created")]
+        //public static event Action<byte[]> Created; // (offerHash)
 
-        [DisplayName("filled")]
-        public static event Action<byte[], BigInteger> Filled; // (offerHash, amount)
+        //[DisplayName("filled")]
+        //public static event Action<byte[], BigInteger> Filled; // (offerHash, amount)
 
-        [DisplayName("cancelled")]
-        public static event Action<byte[]> Cancelled; // (offerHash)
+        //[DisplayName("cancelled")]
+        //public static event Action<byte[]> Cancelled; // (offerHash)
 
-        [DisplayName("transferred")]
-        public static event Action<byte[], byte[], byte, BigInteger> Transferred; // (address, assetID, assetCategory, amount)
+        //[DisplayName("transferred")]
+        //public static event Action<byte[], byte[], byte, BigInteger> Transferred; // (address, assetID, assetCategory, amount)
 
-        [DisplayName("withdrawn")]
-        public static event Action<byte[], byte[], byte, BigInteger> Withdrawn; // (address, assetID, assetCategory, amount)
+        //[DisplayName("withdrawn")]
+        //public static event Action<byte[], byte[], byte, BigInteger> Withdrawn; // (address, assetID, assetCategory, amount)
 
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
         private const ulong feeFactor = 100000; // 1 => 0.001%
@@ -314,8 +314,10 @@ namespace switcheo
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Check that nonce is not repeated
+            Runtime.Log("Calculating hash..");
+            var hash = Hash(offer);
             Runtime.Log("Checking nonce..");
-            if (Storage.Get(Storage.CurrentContext, Hash(offer)).Length != 0) return false;
+            if (Storage.Get(Storage.CurrentContext, hash).Length != 0) return false;
 
             // Check that the amounts > 0
             Runtime.Log("Checking offer amount min..");
@@ -365,7 +367,7 @@ namespace switcheo
             Storage.Put(Storage.CurrentContext, offerHash, ToBuffer(offer));
 
             // Notify runtime
-            Created(offerHash);
+            //Created(offerHash);
             return true;
         }
 
@@ -418,12 +420,12 @@ namespace switcheo
             // Move asset to the maker balance
             Runtime.Log("Moving assets to maker..");
             TransferAssetTo(offer.MakerAddress, offer.WantAssetID, offer.WantAssetCategory, amountToFill - makerFee);
-            Transferred(offer.MakerAddress, offer.WantAssetID, (byte) offer.WantAssetCategory, amountToFill - makerFee);
+            //Transferred(offer.MakerAddress, offer.WantAssetID, (byte) offer.WantAssetCategory, amountToFill - makerFee);
 
             // Move asset to the taker balance
             Runtime.Log("Moving assets to taker..");
             TransferAssetTo(fillerAddress, offer.OfferAssetID, offer.OfferAssetCategory, amountToOffer - takerFee);
-            Transferred(fillerAddress, offer.OfferAssetID, (byte)offer.OfferAssetCategory, amountToOffer - takerFee);
+            //Transferred(fillerAddress, offer.OfferAssetID, (byte)offer.OfferAssetCategory, amountToOffer - takerFee);
 
             // Update available amount
             Runtime.Log("Updating available amount..");
@@ -472,7 +474,7 @@ namespace switcheo
             RemoveOffer(tradingPair, offerHash);
 
             // Notify runtime
-            Cancelled(offerHash);
+            //Cancelled(offerHash);
             return true;
         }
         
@@ -671,8 +673,11 @@ namespace switcheo
         {
             Runtime.Log("Serializing offer..");
             byte[] offerAmountBuffer = ToBytes(o.OfferAmount);
+            Runtime.Log("Serializing offer length..");
             byte[] offerAmountBufferLength = Int32ToBytes(offerAmountBuffer.Length);
+            Runtime.Log("Serializing want amt..");
             byte[] wantAmountBuffer = ToBytes(o.WantAmount);
+            Runtime.Log("Serializing want length..");
             byte[] wantAmountBufferLength = Int32ToBytes(wantAmountBuffer.Length);
             return o.MakerAddress
                 .Concat(TradingPair(o))
