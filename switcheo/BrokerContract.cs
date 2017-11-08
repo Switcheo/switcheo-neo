@@ -202,6 +202,9 @@ namespace switcheo
                         return false;
                     }
 
+                    Runtime.Log("debug");
+                    Runtime.Log(((byte[])args[2]).AsString());
+                    Runtime.Log(((byte[])args[4]).AsString());
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[4], (byte[])args[5]);
 
                     if (VerifyOffer(offer))
@@ -328,6 +331,8 @@ namespace switcheo
 
             // Check that the amounts > 0
             Runtime.Log("Checking offer amount min..");
+            Runtime.Log(ToBytes(offer.OfferAmount).AsString());
+            Runtime.Log(ToBytes(offer.WantAmount).AsString());
             if (offer.OfferAmount <= 0 || offer.WantAmount <= 0) return false;
             
             // Check the trade is across different assets
