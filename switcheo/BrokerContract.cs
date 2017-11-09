@@ -327,7 +327,7 @@ namespace switcheo
             Runtime.Log("Calculating hash..");
             var hash = Hash(offer);
             Runtime.Log("Checking nonce..");
-            if (Storage.Get(Storage.CurrentContext, hash).Length != 0) return false;
+            if (Storage.Get(Storage.CurrentContext, OfferDetailsPrefix.Concat(hash)).Length != 0) return false;
 
             // Check that the amounts > 0
             Runtime.Log("Checking offer amount min..");
