@@ -123,6 +123,8 @@ namespace switcheo
                         return false;
                     }
                 }
+
+                return true;
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
