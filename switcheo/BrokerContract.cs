@@ -26,6 +26,7 @@ namespace switcheo
         //public static event Action<byte[], byte[], byte, BigInteger> Withdrawn; // (address, assetID, assetCategory, amount)
 
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
+        private const ulong assetFactor = 100000000;
         private const ulong feeFactor = 100000; // 1 => 0.001%
         private const int maxFee = 3000; // 3000/10000 = 0.3%
 
@@ -360,7 +361,7 @@ namespace switcheo
             AddOffer(offer);
 
             // Notify runtime
-            //Created(offerHash);
+            Runtime.Log("Offer made successfully!");
             return true;
         }
 
@@ -426,7 +427,7 @@ namespace switcheo
             StoreOffer(offer);
 
             // Notify runtime
-            //Filled(offerHash, amountToFill);
+            Runtime.Log("Offer filled successfully!");
             return true;
         }
 
@@ -452,7 +453,7 @@ namespace switcheo
             RemoveOffer(offer);
 
             // Notify runtime
-            //Cancelled(offerHash);
+            Runtime.Log("Offer cancelled successfully!");
             return true;
         }
         
@@ -482,6 +483,7 @@ namespace switcheo
             Runtime.Log("Reducing balance..");
             ReduceBalance(holderAddress, assetID, amount);
 
+            Runtime.Log("Assets withdrawn successfully!");
             return true;
         }
 
@@ -525,13 +527,7 @@ namespace switcheo
                         sentAmount += (ulong)o.Value;
                     }
                 }
-                var asset = Blockchain.GetAsset(assetID);
-                if (asset.Precision == 0) Runtime.Log("0");
-                if (asset.Precision == 8) Runtime.Log("8");
-                if (sentAmount / (10 ^ (ulong)(asset.Precision)) == amount) Runtime.Log("bingo");
-                Runtime.Log("nope");
-                if (sentAmount / 100000000 != amount) return false;
-                Runtime.Log("yup");
+                if (sentAmount / assetFactor != amount) return false;
                 return true;
             }
             else if (assetCategory == NEP5)
@@ -687,9 +683,6 @@ namespace switcheo
             var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             if (currentBalance - amount > 0) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
             else Storage.Delete(Storage.CurrentContext, key);
-
-            // Notify runtime
-            //Withdrawn(holderAddress, assetID, (byte)assetCategory, amount);
         }
 
         private static byte[] ToBytes(BigInteger value)
