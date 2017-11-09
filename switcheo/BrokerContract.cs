@@ -513,13 +513,14 @@ namespace switcheo
                 Runtime.Log("Verifying SystemAsset..");
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 var outputs = currentTxn.GetOutputs();
-                BigInteger sentAmount = 0;
+                ulong sentAmount = 0;
                 foreach (var o in outputs)
                 {
+                    Runtime.Log("Checking output..");
                     if (o.AssetId == assetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
                     {
                         Runtime.Log("Found a valid output!");
-                        sentAmount += o.Value;
+                        sentAmount += (ulong)o.Value;
                     }
                 }
                 if (sentAmount != amount) return false;
@@ -529,6 +530,7 @@ namespace switcheo
                 // Check allowance on smart contract
                 Runtime.Log("Verifying NEP-5 token..");
                 BigInteger allowedAmount = (BigInteger)CallRPXContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
+                Runtime.Log("Checking allowance..");
                 if (allowedAmount < amount) return false;
             }
 
