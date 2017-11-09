@@ -7,7 +7,7 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
-        [Appcall("1c4f43f942b56ed906dba00b7f3c7ce3da3dd11077532baed900c2cc8c7f247e")] // TODO: Add RPX ScriptHash - or find workaround to call arbitrary contract
+        [Appcall("ecd24a4b2b31ee3144a71f7ac22dec6a3128190f")] // TODO: Add RPX ScriptHash - or find workaround to call arbitrary contract
         public static extern object CallRPXContract(string method, params object[] args);
 
         //[DisplayName("created")]
@@ -333,7 +333,7 @@ namespace switcheo
             Runtime.Log("Checking offer amount min..");
             Runtime.Log(ToBytes(offer.OfferAmount).AsString());
             Runtime.Log(ToBytes(offer.WantAmount).AsString());
-            if (offer.OfferAmount <= 0 || offer.WantAmount <= 0) return false;
+            if (!(offer.OfferAmount > 0 && offer.WantAmount > 0)) return false;
             
             // Check the trade is across different assets
             Runtime.Log("Checking offer asset type..");
@@ -665,7 +665,7 @@ namespace switcheo
 
         private static void TransferAssetTo(byte[] address, byte[] assetID, BigInteger amount)
         {
-            if (amount <= 0) return;
+            if (!(amount > 0)) return;
 
             byte[] key = StoreKey(address, assetID);
             BigInteger currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
@@ -674,7 +674,7 @@ namespace switcheo
 
         private static void ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
         {
-            if (amount <= 0) return;
+            if (!(amount > 0)) return;
 
             var key = StoreKey(address, assetID);
             var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
