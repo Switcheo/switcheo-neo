@@ -524,6 +524,7 @@ namespace switcheo
                     }
                 }
                 if (sentAmount != amount) return false;
+                return true;
             }
             else if (assetCategory == NEP5)
             {
@@ -532,6 +533,7 @@ namespace switcheo
                 BigInteger allowedAmount = (BigInteger)CallRPXContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
                 Runtime.Log("Checking allowance..");
                 if (allowedAmount < amount) return false;
+                return true;
             }
 
             // Unknown asset category
