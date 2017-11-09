@@ -525,7 +525,13 @@ namespace switcheo
                         sentAmount += (ulong)o.Value;
                     }
                 }
-                if (sentAmount != amount) return false;
+                var asset = Blockchain.GetAsset(assetID);
+                if (asset.Precision == 0) Runtime.Log("0");
+                if (asset.Precision == 8) Runtime.Log("8");
+                if (sentAmount / (10 ^ (ulong)(asset.Precision)) == amount) Runtime.Log("bingo");
+                Runtime.Log("nope");
+                if (sentAmount / 100000000 != amount) return false;
+                Runtime.Log("yup");
                 return true;
             }
             else if (assetCategory == NEP5)
