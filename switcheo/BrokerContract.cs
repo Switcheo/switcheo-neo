@@ -7,8 +7,8 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
-        [Appcall("ecd24a4b2b31ee3144a71f7ac22dec6a3128190f")] // TODO: Add RPX ScriptHash - or find workaround to call arbitrary contract
-        public static extern object CallRPXContract(string method, params object[] args);
+        [Appcall("ecd24a4b2b31ee3144a71f7ac22dec6a3128190f")] // TODO: Hardcode RPX ScriptHash - pending [DynamicCall] support
+        public static extern object CallExternalContract(string method, params object[] args);
 
         //[DisplayName("created")]
         //public static event Action<byte[]> Created; // (offerHash)
@@ -317,9 +317,8 @@ namespace switcheo
             // Transfer NEP-5 token if required
             if (offer.OfferAssetCategory == NEP5)
             {
-                // TODO: Do we need to prevent re-entrancy due to external call?
                 Runtime.Log("Transferring NEP-5 token..");
-                bool transferSuccessful = (bool)CallRPXContract("transferFrom", ExecutionEngine.ExecutingScriptHash, offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
+                bool transferSuccessful = (bool)CallExternalContract("transferFrom", ExecutionEngine.ExecutingScriptHash, offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
                 if (!transferSuccessful) return false; // XXX: Getting here would be very bad.
             }
 
@@ -440,9 +439,9 @@ namespace switcheo
         private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Transfer token
-            // TODO: how do we pass Runtime.CheckWitness(ourScriptHash) on NEP5 contract?
+            // TODO: how do we pass Runtime.CheckWitness(ourScriptHash) on the external NEP5 contract?
             Runtime.Log("Transferring NEP-5 token..");
-            bool transferSuccessful = (bool)CallRPXContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
+            bool transferSuccessful = (bool)CallExternalContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
             if (!transferSuccessful) return false;
 
             Runtime.Log("Reducing balance..");
@@ -499,7 +498,7 @@ namespace switcheo
             {
                 // Check allowance on smart contract
                 Runtime.Log("Verifying NEP-5 token..");
-                BigInteger allowedAmount = (BigInteger)CallRPXContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
+                BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
                 Runtime.Log("Checking allowance..");
                 if (allowedAmount < amount) return false;
                 return true;
@@ -511,13 +510,16 @@ namespace switcheo
 
         private static Offer GetOffer(byte[] hash)
         {
+            Runtime.Log("Getting offer..");
             var offerData = Storage.Get(Storage.CurrentContext, OfferDetailsPrefix.Concat(hash));
             var offerAmount = Storage.Get(Storage.CurrentContext, OfferAmountPrefix.Concat(hash));
             var wantAmount = Storage.Get(Storage.CurrentContext, WantAmountPrefix.Concat(hash));
             var availableAmount = Storage.Get(Storage.CurrentContext, AvailableAmountPrefix.Concat(hash));
 
+            Runtime.Log("Checking if retrieved data is a valid offer..");
             if (offerData.Length == 0 || offerAmount.Length == 0 || wantAmount.Length == 0 || availableAmount.Length == 0) return new Offer(); // invalid offer hash
 
+            Runtime.Log("Building offer..");
             var offerAssetIDLength = 20;
             var wantAssetIDLength = 20;
             if (offerData.Range(20, 1) == SystemAsset) offerAssetIDLength = 32;
@@ -528,6 +530,7 @@ namespace switcheo
             var wantAssetID = offerData.Range(22 + offerAssetIDLength, wantAssetIDLength);
             var previousOfferHash = offerData.Range(22 + offerAssetIDLength + wantAssetIDLength, 32);
 
+            Runtime.Log("Initializing offer..");
             return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash);
         }
 
@@ -545,7 +548,7 @@ namespace switcheo
             else
             {
                 Runtime.Log("Serializing offer..");
-                // TODO: we can save storage space by not storing assetCategory / IDs
+                // TODO: we can save storage space by not storing assetCategory / IDs?
                 var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
@@ -576,6 +579,8 @@ namespace switcheo
         private static void RemoveOffer(byte[] offerHash, Offer offer)
         {
             var tradingPair = TradingPair(offer);
+
+            if (offerHash.Length != 32) Runtime.Log("Invalid offer hash length!");
 
             Runtime.Log("Finding offer in list..");
             var head = Storage.Get(Storage.CurrentContext, tradingPair);
