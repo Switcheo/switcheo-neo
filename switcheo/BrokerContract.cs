@@ -522,13 +522,13 @@ namespace switcheo
             Runtime.Log("Building offer..");
             var offerAssetIDLength = 20;
             var wantAssetIDLength = 20;
-            if (offerData.Range(20, 1) == SystemAsset) offerAssetIDLength = 32;
-            if (offerData.Range(21, 1) == SystemAsset) wantAssetIDLength = 32;
+            if (offerData.Range(20, 2) == SystemAsset) offerAssetIDLength = 32;
+            if (offerData.Range(22, 2) == SystemAsset) wantAssetIDLength = 32;
 
             var makerAddress = offerData.Range(0, 20);
-            var offerAssetID = offerData.Range(22, offerAssetIDLength);
-            var wantAssetID = offerData.Range(22 + offerAssetIDLength, wantAssetIDLength);
-            var previousOfferHash = offerData.Range(22 + offerAssetIDLength + wantAssetIDLength, 32);
+            var offerAssetID = offerData.Range(24, offerAssetIDLength);
+            var wantAssetID = offerData.Range(24 + offerAssetIDLength, wantAssetIDLength);
+            var previousOfferHash = offerData.Range(24 + offerAssetIDLength + wantAssetIDLength, 32);
 
             Runtime.Log("Initializing offer..");
             return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash);
@@ -580,10 +580,9 @@ namespace switcheo
         {
             var tradingPair = TradingPair(offer);
 
-            if (offerHash.Length != 32) Runtime.Log("Invalid offer hash length!");
-
             Runtime.Log("Finding offer in list..");
-            var head = Storage.Get(Storage.CurrentContext, tradingPair);
+            byte[] head = Storage.Get(Storage.CurrentContext, tradingPair);
+
             if (head == offerHash) // This offer is the HEAD - simple case!
             {                
                 // Set the new HEAD of the linked list to the previous offer if there is one
@@ -604,7 +603,7 @@ namespace switcheo
                 Runtime.Log("Searching for preceding offer..");
                 do
                 {
-                    var search = GetOffer(head);
+                    Offer search = GetOffer(head);
                     Runtime.Log("Comparing offer hash..");
                     if (search.PreviousOfferHash == offerHash)
                     {
@@ -612,6 +611,16 @@ namespace switcheo
                         Runtime.Log("Found offer, moving edges..");
                         search.PreviousOfferHash = offer.PreviousOfferHash;
                         StoreOffer(head, search);
+                        break;
+                    }
+                    else if (search.PreviousOfferHash.Length > 0)
+                    {
+                        Runtime.Log("Moving search ptr");
+                        search = GetOffer(search.PreviousOfferHash);
+                    }
+                    else
+                    {
+                        Runtime.Log("Could not find offer in list any longer!");
                         break;
                     }
                 } while (true);
