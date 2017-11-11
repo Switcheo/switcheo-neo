@@ -205,7 +205,7 @@ namespace switcheo
                         return false;
                     }
 
-                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[4], (byte[])args[5]);
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], (byte[])args[5]);
 
                     if (VerifyOffer(offer))
                     {
@@ -581,7 +581,8 @@ namespace switcheo
             else
             {
                 Runtime.Log("Serializing offer..");
-                var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.Nonce);
+                // TODO: we can save storage pace by not storing assetCategory / IDs
+                var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
                 Storage.Put(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash), ToBytes(offer.WantAmount));
