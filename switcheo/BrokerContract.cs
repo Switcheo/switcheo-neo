@@ -157,40 +157,6 @@ namespace switcheo
                     return Initialize((BigInteger)args[0], (BigInteger)args[1], (byte[])args[2]);
                 }
 
-                // == Query ==
-                // TODO: do we need all these helper methods? client can query contract storage directly!
-                // Check that contract has been initialized
-                if (Storage.Get(Storage.CurrentContext, "state").Length == 0)
-                {
-                    Runtime.Log("Contract has not been initialized!");
-                    return false;
-                }
-                if (operation == "getOffers")
-                {
-                    if (args.Length != 2)
-                    {
-                        Runtime.Log("Wrong number of arguments!");
-                        return false;
-                    }
-                    var key = ((byte[])args[0]).Concat((byte[])args[1]);
-                    return Storage.Get(Storage.CurrentContext, key);
-                }
-                if (operation == "getOffer")
-                {
-                    if (args.Length != 1)
-                    {
-                        Runtime.Log("Wrong number of arguments!");
-                        return false;
-                    }
-                    return Storage.Get(Storage.CurrentContext, (byte[])args[0]);
-                }
-                if (operation == "tradingStatus")
-                    return Storage.Get(Storage.CurrentContext, "state");
-                if (operation == "getMakerFee")
-                    return Storage.Get(Storage.CurrentContext, "makerFee");
-                if (operation == "getTakerFee")
-                    return Storage.Get(Storage.CurrentContext, "takerFee");
-
                 // == Execute ==
                 if (operation == "makeOffer")
                 {
