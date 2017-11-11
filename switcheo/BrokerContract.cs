@@ -67,7 +67,7 @@ namespace switcheo
             byte[] makerAddress,
             byte[] offerAssetID, byte[] offerAmount,
             byte[] wantAssetID,  byte[] wantAmount,
-            byte[] availableAmount, byte[] nonce
+            byte[] availableAmount, byte[] previousOfferHash
         )
         {
             var offerAssetCategory = NEP5;
@@ -85,7 +85,7 @@ namespace switcheo
                 WantAssetCategory = wantAssetCategory,
                 WantAmount = wantAmount.AsBigInteger(),
                 AvailableAmount = availableAmount.AsBigInteger(),
-                Nonce = nonce.Take(32)
+                PreviousOfferHash = previousOfferHash,
             };
         }
 
@@ -205,11 +205,12 @@ namespace switcheo
                         return false;
                     }
 
-                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], (byte[])args[5]);
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], null);
+                    var offerHash = Hash(offer, (byte[])args[5]);
 
-                    if (VerifyOffer(offer))
+                    if (VerifyOffer(offerHash, offer))
                     {
-                        return MakeOffer(offer);
+                        return MakeOffer(offerHash, offer);
                     }
                     else
                     {
@@ -317,17 +318,15 @@ namespace switcheo
             return Storage.Get(Storage.CurrentContext, offerAssetID.Concat(wantAssetID));
         }
 
-        private static bool VerifyOffer(Offer offer)
+        private static bool VerifyOffer(byte[] offerHash, Offer offer)
         {
             // Check that transaction is signed by the maker
             Runtime.Log("Checking witness..");
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Check that nonce is not repeated
-            Runtime.Log("Calculating hash..");
-            var hash = Hash(offer);
             Runtime.Log("Checking nonce..");
-            if (Storage.Get(Storage.CurrentContext, OfferDetailsPrefix.Concat(hash)).Length != 0) return false;
+            if (Storage.Get(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash)).Length != 0) return false;
 
             // Check that the amounts > 0
             Runtime.Log("Checking offer amount min..");
@@ -347,7 +346,7 @@ namespace switcheo
             return VerifySentAmount(offer.MakerAddress, offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
         }
 
-        private static bool MakeOffer(Offer offer)
+        private static bool MakeOffer(byte[] offerHash, Offer offer)
         {
             // Transfer NEP-5 token if required
             if (offer.OfferAssetCategory == NEP5)
@@ -358,7 +357,7 @@ namespace switcheo
                 if (!transferSuccessful) return false; // XXX: Getting here would be very bad.
             }
 
-            AddOffer(offer);
+            AddOffer(offerHash, offer);
 
             // Notify runtime
             Runtime.Log("Offer made successfully!");
@@ -424,7 +423,7 @@ namespace switcheo
             Runtime.Log("Updating available amount..");
             offer.AvailableAmount = offer.AvailableAmount - amountToFill;
 
-            StoreOffer(offer);
+            StoreOffer(offerHash, offer);
 
             // Notify runtime
             Runtime.Log("Offer filled successfully!");
@@ -450,7 +449,7 @@ namespace switcheo
 
             // Remove offer
             Runtime.Log("Removing cancelled offer..");
-            RemoveOffer(offer);
+            RemoveOffer(offerHash, offer);
 
             // Notify runtime
             Runtime.Log("Offer cancelled successfully!");
@@ -561,27 +560,26 @@ namespace switcheo
             var makerAddress = offerData.Range(0, 20);
             var offerAssetID = offerData.Range(22, offerAssetIDLength);
             var wantAssetID = offerData.Range(22 + offerAssetIDLength, wantAssetIDLength);
-            var nonce = offerData.Range(22 + offerAssetIDLength + wantAssetIDLength, 32);
+            var previousOfferHash = offerData.Range(22 + offerAssetIDLength + wantAssetIDLength, 32);
 
-            return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, nonce);
+            return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash);
         }
 
-        private static void StoreOffer(Offer offer)
+        private static void StoreOffer(byte[] offerHash, Offer offer)
         {
             Runtime.Log("Storing offer..");
-            var offerHash = Hash(offer); // TODO: we seem to be hashing too many times unneccessarily 
 
             // Remove offer if completely filled
             if (offer.AvailableAmount == 0)
             {
                 Runtime.Log("Removing depleted offer..");
-                RemoveOffer(offer);
+                RemoveOffer(offerHash, offer);
             }
             // Store offer otherwise
             else
             {
                 Runtime.Log("Serializing offer..");
-                // TODO: we can save storage pace by not storing assetCategory / IDs
+                // TODO: we can save storage space by not storing assetCategory / IDs
                 var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
@@ -590,7 +588,7 @@ namespace switcheo
             }
         }
 
-        private static void AddOffer(Offer offer)
+        private static void AddOffer(byte[] offerHash, Offer offer)
         {
             var tradingPair = TradingPair(offer);
             var previousOfferHash = Storage.Get(Storage.CurrentContext, tradingPair);
@@ -603,16 +601,15 @@ namespace switcheo
             }
 
             // Set the HEAD of the linked list for this trading pair as this offer
-            Storage.Put(Storage.CurrentContext, tradingPair, Hash(offer));
+            Storage.Put(Storage.CurrentContext, tradingPair, offerHash);
 
             // Store the offer
-            StoreOffer(offer);            
+            StoreOffer(offerHash, offer);            
         }
 
-        private static void RemoveOffer(Offer offer)
+        private static void RemoveOffer(byte[] offerHash, Offer offer)
         {
             var tradingPair = TradingPair(offer);
-            var offerHash = Hash(offer); // TODO: we seem to be hashing too many times unneccessarily 
 
             Runtime.Log("Finding offer in list..");
             var head = Storage.Get(Storage.CurrentContext, tradingPair);
@@ -643,7 +640,7 @@ namespace switcheo
                         // Move the incoming edge from the preceding offer to the offer before this one
                         Runtime.Log("Found offer, moving edges..");
                         search.PreviousOfferHash = offer.PreviousOfferHash;
-                        StoreOffer(search);
+                        StoreOffer(head, search);
                         break;
                     }
                 } while (true);
@@ -708,9 +705,9 @@ namespace switcheo
             return o.OfferAssetID.Concat(o.WantAssetID);
         }
 
-        private static byte[] Hash(Offer o)
+        private static byte[] Hash(Offer o, byte[] nonce)
         {
-            Runtime.Log("Serializing amounts..");
+            Runtime.Log("Calculating hash..");
             var offerAmountBuffer = ToBytes(o.OfferAmount);
             var wantAmountBuffer = ToBytes(o.WantAmount);
 
@@ -719,7 +716,7 @@ namespace switcheo
                 .Concat(TradingPair(o))
                 .Concat(offerAmountBuffer)
                 .Concat(wantAmountBuffer)
-                .Concat(o.Nonce);
+                .Concat(nonce);
 
             Runtime.Log("Calculating offer hash..");
             return Hash256(bytes);
