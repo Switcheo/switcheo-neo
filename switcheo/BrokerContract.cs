@@ -1,9 +1,7 @@
 ﻿using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
 using Neo.SmartContract.Framework.Services.System;
-using System;
 using System.Numerics;
-using System.ComponentModel;
 
 namespace switcheo
 {
@@ -26,9 +24,6 @@ namespace switcheo
 
         //[DisplayName("withdrawn")]
         //public static event Action<byte[], byte[], byte, BigInteger> Withdrawn; // (address, assetID, assetCategory, amount)
-
-        [DisplayName("testing")]
-        public static event Action<byte[], byte[], byte, BigInteger, BigInteger> Testing; // (from, to, amount)
 
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
         private const ulong assetFactor = 100000000;
@@ -505,7 +500,6 @@ namespace switcheo
                 Runtime.Log("Verifying NEP-5 token..");
                 BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
                 Runtime.Log("Checking allowance..");
-                Testing(originator, ExecutionEngine.ExecutingScriptHash, amount, allowedAmount);
                 if (allowedAmount < amount) return false;
                 return true;
             }
