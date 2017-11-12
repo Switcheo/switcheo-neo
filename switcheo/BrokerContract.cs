@@ -353,11 +353,11 @@ namespace switcheo
             // Check that amount to offer <= available amount
             Runtime.Log("Checking amounts..");
             BigInteger amountToOffer = AmountToOffer(offer, amountToFill);
-            if (amountToOffer > offer.AvailableAmount) return false;
+            if (amountToOffer > offer.AvailableAmount || amountToOffer < 1) return false;
 
             // Verify that the filling txn really has the required assets available
             Runtime.Log("Checking sent amount..");
-            return VerifySentAmount(offer.MakerAddress, offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
+            return VerifySentAmount(fillerAddress, offer.WantAssetID, offer.WantAssetCategory, amountToFill);
         }
 
         private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
