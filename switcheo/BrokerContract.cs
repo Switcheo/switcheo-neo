@@ -371,7 +371,7 @@ namespace switcheo
             BigInteger amountToOffer = AmountToOffer(offer, amountToFill);
             BigInteger makerFeeRate = Storage.Get(Storage.CurrentContext, "makerFee").AsBigInteger();
             BigInteger takerFeeRate = Storage.Get(Storage.CurrentContext, "takerFee").AsBigInteger();
-            BigInteger makerFee = (amountToOffer * makerFeeRate) / feeFactor;
+            BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
             BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
 
             // Move fees
@@ -391,7 +391,7 @@ namespace switcheo
 
             // Update available amount
             Runtime.Log("Updating available amount..");
-            offer.AvailableAmount = offer.AvailableAmount - amountToFill;
+            offer.AvailableAmount = offer.AvailableAmount - amountToOffer;
 
             StoreOffer(offerHash, offer);
 
