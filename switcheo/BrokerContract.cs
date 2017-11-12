@@ -318,7 +318,7 @@ namespace switcheo
             if (offer.OfferAssetCategory == NEP5)
             {
                 Runtime.Log("Transferring NEP-5 token..");
-                bool transferSuccessful = (bool)CallExternalContract("transferFrom", offer.MakerAddress, offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
+                bool transferSuccessful = (bool)CallExternalContract("transfer", offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
                 if (!transferSuccessful) {
                     Runtime.Log("Failed to transfer tokens even though allowance passed!");
                     return false; // XXX: Getting here would be very bad.
@@ -500,10 +500,11 @@ namespace switcheo
             else if (assetCategory == NEP5)
             {
                 // Check allowance on smart contract
-                Runtime.Log("Verifying NEP-5 token..");
-                BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
-                Runtime.Log("Checking allowance..");
-                if (allowedAmount < amount) return false;
+                // TODO: we could just skip this to save on gas cost, and just fail on transfer?
+                //Runtime.Log("Verifying NEP-5 token..");
+                //BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
+                //Runtime.Log("Checking allowance..");
+                //if (allowedAmount < amount) return false;
                 return true;
             }
 
@@ -553,10 +554,15 @@ namespace switcheo
                 Runtime.Log("Serializing offer..");
                 // TODO: we can save storage space by not storing assetCategory / IDs?
                 var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
+                Runtime.Log("debug 1..");
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
+                Runtime.Log("debug 2..");
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
+                Runtime.Log("debug 3..");
                 Storage.Put(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash), ToBytes(offer.WantAmount));
+                Runtime.Log("debug 4..");
                 Storage.Put(Storage.CurrentContext, AvailableAmountPrefix.Concat(offerHash), ToBytes(offer.AvailableAmount));
+                Runtime.Log("debug 5..");
             }
         }
 
