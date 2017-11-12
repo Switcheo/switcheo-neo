@@ -656,7 +656,11 @@ namespace switcheo
 
         private static void TransferAssetTo(byte[] address, byte[] assetID, BigInteger amount)
         {
-            if (!(amount > 0)) return;
+            if (amount < 1) 
+            {
+                Runtime.Log("Amount to transfer is less than 1!");
+                return;
+            }
 
             byte[] key = StoreKey(address, assetID);
             BigInteger currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
@@ -665,7 +669,11 @@ namespace switcheo
 
         private static void ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
         {
-            if (!(amount > 0)) return;
+            if (amount < 1)
+            {
+                Runtime.Log("Amount to transfer is less than 1!");
+                return;
+            }
 
             var key = StoreKey(address, assetID);
             var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
