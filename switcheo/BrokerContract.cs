@@ -318,8 +318,11 @@ namespace switcheo
             if (offer.OfferAssetCategory == NEP5)
             {
                 Runtime.Log("Transferring NEP-5 token..");
-                bool transferSuccessful = (bool)CallExternalContract("transferFrom", ExecutionEngine.ExecutingScriptHash, offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
-                if (!transferSuccessful) return false; // XXX: Getting here would be very bad.
+                bool transferSuccessful = (bool)CallExternalContract("transferFrom", offer.MakerAddress, offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
+                if (!transferSuccessful) {
+                    Runtime.Log("Failed to transfer tokens even though allowance passed!");
+                    return false; // XXX: Getting here would be very bad.
+                }
             }
 
             AddOffer(offerHash, offer);
