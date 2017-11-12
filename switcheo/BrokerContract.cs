@@ -7,7 +7,7 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
-        [Appcall("ecd24a4b2b31ee3144a71f7ac22dec6a3128190f")] // TODO: Hardcode RPX ScriptHash - pending [DynamicCall] support
+        [Appcall("3a5ae8c529a96007831e1fdcae1bff3af35548dc")] // TODO: Hardcode RPX ScriptHash - pending [DynamicCall] support
         public static extern object CallExternalContract(string method, params object[] args);
 
         //[DisplayName("created")]
