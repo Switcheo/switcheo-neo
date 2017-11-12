@@ -182,6 +182,7 @@ namespace switcheo
                     {
                         Runtime.Log("Offer is invalid!");
                         // TODO: RefundAllInputs()
+                        return false;
                     }
                 }
                 if (operation == "fillOffer")
@@ -205,6 +206,7 @@ namespace switcheo
                     {
                         Runtime.Log("Fill is invalid!");
                         // TODO: RefundAllInputs()
+                        return false;
                     }
                 }
                 if (operation == "cancelOffer")
@@ -320,8 +322,8 @@ namespace switcheo
                 Runtime.Log("Transferring NEP-5 token..");
                 bool transferSuccessful = (bool)CallExternalContract("transfer", offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
                 if (!transferSuccessful) {
-                    Runtime.Log("Failed to transfer tokens even though allowance passed!");
-                    return false; // XXX: Getting here would be very bad.
+                    Runtime.Log("Failed to transfer NEP-5 tokens!");
+                    return false;
                 }
             }
 
@@ -494,7 +496,11 @@ namespace switcheo
                         sentAmount += (ulong)o.Value;
                     }
                 }
-                if (sentAmount / assetFactor != amount) return false;
+                // XXX: this recommended method doesn't actually work - a single transaction can contain multiple invocations of the same method!
+                if (sentAmount / assetFactor < amount) {
+                    Runtime.Log("Not enough of asset sent");
+                    return false;   
+                }
                 return true;
             }
             else if (assetCategory == NEP5)
@@ -554,15 +560,10 @@ namespace switcheo
                 Runtime.Log("Serializing offer..");
                 // TODO: we can save storage space by not storing assetCategory / IDs?
                 var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
-                Runtime.Log("debug 1..");
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
-                Runtime.Log("debug 2..");
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
-                Runtime.Log("debug 3..");
                 Storage.Put(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash), ToBytes(offer.WantAmount));
-                Runtime.Log("debug 4..");
                 Storage.Put(Storage.CurrentContext, AvailableAmountPrefix.Concat(offerHash), ToBytes(offer.AvailableAmount));
-                Runtime.Log("debug 5..");
             }
         }
 
