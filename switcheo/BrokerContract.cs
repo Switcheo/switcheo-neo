@@ -607,16 +607,16 @@ namespace switcheo
                     Storage.Delete(Storage.CurrentContext, tradingPair);
                 }
             }
-            else // Find the preceding offer 
+            else // Find the later offer 
             {
-                Runtime.Log("Searching for preceding offer..");
+                Runtime.Log("Searching for later offer..");
                 do
                 {
                     Offer search = GetOffer(head);
                     Runtime.Log("Comparing offer hash..");
                     if (search.PreviousOfferHash == offerHash)
                     {
-                        // Move the incoming edge from the preceding offer to the offer before this one
+                        // Move the incoming edge from the later offer to the previous offer
                         Runtime.Log("Found offer, moving edges..");
                         search.PreviousOfferHash = offer.PreviousOfferHash;
                         StoreOffer(head, search);
