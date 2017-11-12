@@ -107,23 +107,23 @@ namespace switcheo
             {
                 // == Withdrawal of SystemAsset ==
                 // Check that the TransactionAttribute has been set to signify deduction during Application phase
-                if (!WithdrawingSystemAsset())
-                {
-                    Runtime.Log("TransactionAttribute flag not set!");
-                    return false;
-                }
+                //if (!WithdrawingSystemAsset())
+                //{
+                //    Runtime.Log("TransactionAttribute flag not set!");
+                //    return false;
+                //}
 
                 // Verify that each output is allowed
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                var outputs = currentTxn.GetOutputs();
-                foreach (var o in outputs)
-                {
-                    if (!VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value))
-                    {
-                        Runtime.Log("Found an unauthorized output!");
-                        return false;
-                    }
-                }
+                //var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                //var outputs = currentTxn.GetOutputs();
+                //foreach (var o in outputs)
+                //{
+                //    if (!VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value))
+                //    {
+                //        Runtime.Log("Found an unauthorized output!");
+                //        return false;
+                //    }
+                //}
 
                 return true;
             }
