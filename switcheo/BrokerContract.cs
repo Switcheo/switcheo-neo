@@ -607,7 +607,7 @@ namespace switcheo
                     Storage.Delete(Storage.CurrentContext, tradingPair);
                 }
             }
-            else if (offer.PreviousOfferHash.Length > 0) // Find the preceding offer 
+            else // Find the preceding offer 
             {
                 Runtime.Log("Searching for preceding offer..");
                 do
