@@ -266,7 +266,7 @@ namespace switcheo
                 }
             }
 
-            return false;
+            return true;
         }
 
         private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
@@ -611,7 +611,7 @@ namespace switcheo
             else // Find the later offer 
             {
                 Runtime.Log("Searching for later offer..");
-                do
+                do // XXX: this may break stack limits (1024)
                 {
                     Offer search = GetOffer(head);
                     Runtime.Log("Comparing offer hash..");
