@@ -559,7 +559,8 @@ namespace switcheo
                 Runtime.Log("Serializing offer..");
                 // TODO: we can save storage space by not storing assetCategory / IDs?
                 var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
-                // TODO: serialize these properly
+                Runtime.Log("Serializing amounts..");
+                // TODO: serialize these properly as a single key:
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
                 Storage.Put(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash), ToBytes(offer.WantAmount));
@@ -618,7 +619,17 @@ namespace switcheo
                     if (search.PreviousOfferHash == offerHash)
                     {
                         // Move the incoming edge from the later offer to the previous offer
-                        Runtime.Log("Found offer, moving edges..");
+                        Runtime.Log("Found offer");
+                        if (offer.PreviousOfferHash.Length > 0)
+                        {
+                            Runtime.Log("Moving edges..");
+                            search.PreviousOfferHash = offer.PreviousOfferHash;
+                        }
+                        else
+                        {
+                            Runtime.Log("Offer is the last in the list..");
+                            search.PreviousOfferHash = Empty;
+                        }
                         search.PreviousOfferHash = offer.PreviousOfferHash;
                         StoreOffer(head, search);
                         break;
