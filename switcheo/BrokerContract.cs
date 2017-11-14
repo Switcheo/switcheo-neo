@@ -130,6 +130,8 @@ namespace switcheo
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
+                Runtime.Log("Application trigger");
+
                 // == Withdrawal of SystemAsset ==
                 // TODO: can the vm be crashed after verification by manipulating the invoke AppCall args?
                 if (WithdrawingSystemAsset())
