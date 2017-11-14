@@ -263,7 +263,7 @@ namespace switcheo
                     return SetFees((BigInteger)args[0], (BigInteger)args[1]);
                 }
                 if (operation == "setFeeAddress")
-                {
+                {   
                     if (args.Length != 1) return false;
                     return SetFeeAddress((byte[])args[0]);
                 }
@@ -493,12 +493,23 @@ namespace switcheo
                         sentAmount += (ulong)o.Value;
                     }
                 }
-                // XXX: this recommended method doesn't actually work - a single transaction can contain multiple invocations of the same method!
-                // Does the TailCall OpCode solve this? How do we force that?
-                if (sentAmount / assetFactor < amount) {
+
+                // Convert from Fixed8
+                sentAmount = sentAmount / assetFactor;
+
+                // Get previously consumed amount wihtin same transaction
+                var consumedAmount = Storage.Get(Storage.CurrentContext, currentTxn.Hash.Concat(assetID)).AsBigInteger();
+
+                // Check that the sent amount is still sufficient
+                if (sentAmount - consumedAmount < amount) {
                     Runtime.Log("Not enough of asset sent");
                     return false;   
                 }
+
+                // Update the consuemd amount for this txn
+                Storage.Put(Storage.CurrentContext, currentTxn.Hash.Concat(assetID), ToBytes(consumedAmount + sentAmount));
+
+                // TODO: how to cleanup?
                 return true;
             }
             else if (assetCategory == NEP5)
