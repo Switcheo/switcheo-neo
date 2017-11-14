@@ -107,36 +107,42 @@ namespace switcheo
             {
                 // == Withdrawal of SystemAsset ==
                 // Check that the TransactionAttribute has been set to signify deduction during Application phase
-                //if (!WithdrawingSystemAsset())
-                //{
-                //    Runtime.Log("TransactionAttribute flag not set!");
-                //    return false;
-                //}
+                if (!WithdrawingSystemAsset())
+                {
+                    Runtime.Log("TransactionAttribute flag not set!");
+                    return false;
+                }
 
                 // Verify that each output is allowed
-                //var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                //var outputs = currentTxn.GetOutputs();
-                //foreach (var o in outputs)
-                //{
-                //    if (!VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value))
-                //    {
-                //        Runtime.Log("Found an unauthorized output!");
-                //        return false;
-                //    }
-                //}
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                var outputs = currentTxn.GetOutputs();
+                foreach (var o in outputs)
+                {
+                    if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash && 
+                        !VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value))
+                    {
+                        Runtime.Log("Found an unauthorized output!");
+                        return false;
+                    }
+                }
 
                 return true;
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
                 // == Withdrawal of SystemAsset ==
+                // TODO: can the vm be crashed after verification by manipulating the invoke AppCall args?
                 if (WithdrawingSystemAsset())
                 {
                     var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                     var outputs = currentTxn.GetOutputs();
                     foreach (var o in outputs)
                     {
-                        ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
+                        if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash)
+                        {
+                            Runtime.Log("Found a withdrawal..");
+                            ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
+                        }
                     }
                     return true;
                 }
@@ -444,7 +450,6 @@ namespace switcheo
         private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Transfer token
-            // TODO: how do we pass Runtime.CheckWitness(ourScriptHash) on the external NEP5 contract?
             Runtime.Log("Transferring NEP-5 token..");
             bool transferSuccessful = (bool)CallExternalContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
             if (!transferSuccessful) return false;
@@ -671,7 +676,7 @@ namespace switcheo
         {
             if (amount < 1)
             {
-                Runtime.Log("Amount to transfer is less than 1!");
+                Runtime.Log("Amount to reduce is less than 1!");
                 return;
             }
 
