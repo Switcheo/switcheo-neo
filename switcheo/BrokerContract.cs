@@ -20,10 +20,10 @@ namespace switcheo
         //public static event Action<byte[]> Cancelled; // (offerHash)
 
         //[DisplayName("transferred")]
-        //public static event Action<byte[], byte[], byte, BigInteger> Transferred; // (address, assetID, assetCategory, amount)
+        //public static event Action<byte[], byte[], BigInteger> Transferred; // (address, assetID, amount)
 
         //[DisplayName("withdrawn")]
-        //public static event Action<byte[], byte[], byte, BigInteger> Withdrawn; // (address, assetID, assetCategory, amount)
+        //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
         private const ulong assetFactor = 100000000;
@@ -107,11 +107,8 @@ namespace switcheo
             {
                 // == Withdrawal of SystemAsset ==
                 // Check that the TransactionAttribute has been set to signify deduction during Application phase
-                if (!WithdrawingSystemAsset())
-                {
-                    Runtime.Log("TransactionAttribute flag not set!");
-                    return false;
-                }
+                // XXX: There is no currently way to check that this contract is invoked from the verification phase
+                if (!WithdrawingSystemAsset()) return false;
 
                 // Verify that each output is allowed
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
@@ -119,12 +116,10 @@ namespace switcheo
                 foreach (var o in outputs)
                 {
                     if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash && 
-                        !VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value))
-                    {
-                        Runtime.Log("Found an unauthorized output!");
-                        return false;
-                    }
+                        !VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value)) return false;
                 }
+
+                // TODO: ensure that gas isn't burnt?
 
                 return true;
             }
@@ -133,7 +128,7 @@ namespace switcheo
                 Runtime.Log("Application trigger");
 
                 // == Withdrawal of SystemAsset ==
-                // TODO: can the vm be crashed after verification by manipulating the invoke AppCall args?
+                // XXX: can the vm be crashed after verification by manipulating the invoke AppCall args?
                 if (WithdrawingSystemAsset())
                 {
                     var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
@@ -146,7 +141,7 @@ namespace switcheo
                             ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
                         }
                     }
-                    return true;
+                    // return true;
                 }
 
                 // == Init ==
@@ -354,7 +349,6 @@ namespace switcheo
             if (offer.MakerAddress == Empty) return false;
 
             // Check that the filler is different from the maker
-            // TODO: can we omit this?
             Runtime.Log("Checking addresses..");
             if (fillerAddress == offer.MakerAddress) return false;
 
@@ -436,10 +430,6 @@ namespace switcheo
         
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
-            // Check that transaction is signed by the holder
-            Runtime.Log("Checking witness..");
-            if (!Runtime.CheckWitness(holderAddress)) return false;
-
             // Check that there are asset value > 0 in balance
             Runtime.Log("Checking asset value..");
             var key = StoreKey(holderAddress, assetID);
@@ -504,6 +494,7 @@ namespace switcheo
                     }
                 }
                 // XXX: this recommended method doesn't actually work - a single transaction can contain multiple invocations of the same method!
+                // Does the TailCall OpCode solve this? How do we force that?
                 if (sentAmount / assetFactor < amount) {
                     Runtime.Log("Not enough of asset sent");
                     return false;   
@@ -512,8 +503,8 @@ namespace switcheo
             }
             else if (assetCategory == NEP5)
             {
+                // Just skip this to save on gas cost, and fail if transfer fails:
                 // Check allowance on smart contract
-                // TODO: we could just skip this to save on gas cost, and just fail on transfer?
                 //Runtime.Log("Verifying NEP-5 token..");
                 //BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
                 //Runtime.Log("Checking allowance..");
@@ -567,6 +558,7 @@ namespace switcheo
                 Runtime.Log("Serializing offer..");
                 // TODO: we can save storage space by not storing assetCategory / IDs?
                 var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
+                // TODO: serialize these properly
                 Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
                 Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), ToBytes(offer.OfferAmount));
                 Storage.Put(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash), ToBytes(offer.WantAmount));
@@ -653,11 +645,14 @@ namespace switcheo
         private static bool WithdrawingSystemAsset()
         {
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            if (currentTxn.Type != 0xd1) return false;
+
             var txnAttributes = currentTxn.GetAttributes();
             foreach (var attr in txnAttributes)
             {
                 if (attr.Usage == 0xa1 && attr.Data == Yes) return true;
             }
+
             return false;
         }
 
