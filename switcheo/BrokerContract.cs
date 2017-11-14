@@ -314,7 +314,7 @@ namespace switcheo
 
             // Verify that the offer txn has really has the indicated assets available
             Runtime.Log("Checking sent amount..");
-            return VerifySentAmount(offer.MakerAddress, offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
+            return VerifySentAmount(offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
         }
 
         private static bool MakeOffer(byte[] offerHash, Offer offer)
@@ -359,7 +359,7 @@ namespace switcheo
 
             // Verify that the filling txn really has the required assets available
             Runtime.Log("Checking sent amount..");
-            return VerifySentAmount(fillerAddress, offer.WantAssetID, offer.WantAssetCategory, amountToFill);
+            return VerifySentAmount(offer.WantAssetID, offer.WantAssetCategory, amountToFill);
         }
 
         private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
@@ -474,7 +474,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool VerifySentAmount(byte[] originator, byte[] assetID, byte[] assetCategory, BigInteger amount)
+        private static bool VerifySentAmount(byte[] assetID, byte[] assetCategory, BigInteger amount)
         {
             // Verify that the offer really has the indicated assets available
             if (assetCategory == SystemAsset)
@@ -503,7 +503,8 @@ namespace switcheo
             }
             else if (assetCategory == NEP5)
             {
-                // Just skip this to save on gas cost, and fail if transfer fails:
+                // Just skip this check and fail later if the transfer fails - saves gas cost and supports old NEP-5 standard
+
                 // Check allowance on smart contract
                 //Runtime.Log("Verifying NEP-5 token..");
                 //BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
