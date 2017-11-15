@@ -493,7 +493,7 @@ namespace switcheo
             var offerAssetIDLength = 20;
             var wantAssetIDLength = 20;
             var typeLength = 2;
-            var numPrefixLength = 4;
+            var intLength = 8;
 
             if (offerData.Range(index, typeLength) == SystemAsset) offerAssetIDLength = 32;
             index += typeLength;
@@ -507,23 +507,14 @@ namespace switcheo
             var wantAssetID = offerData.Range(index, wantAssetIDLength);
             index += wantAssetIDLength;
 
-            var offerAmountLength = (int)offerData.Range(index, numPrefixLength).AsBigInteger();
-            index += numPrefixLength;
-                
-            var wantAmountLength = (int)offerData.Range(index, numPrefixLength).AsBigInteger();
-            index += numPrefixLength;
+            var offerAmount = offerData.Range(index, intLength);
+            index += intLength;
 
-            var availableAmountLength = (int)offerData.Range(index, numPrefixLength).AsBigInteger();
-            index += numPrefixLength;
+            var wantAmount = offerData.Range(index, intLength);
+            index += intLength;
 
-            var offerAmount = offerData.Range(index, offerAmountLength);
-            index += offerAmountLength;
-
-            var wantAmount = offerData.Range(index, wantAmountLength);
-            index += wantAmountLength;
-
-            var availableAmount = offerData.Range(index, availableAmountLength);
-            index += availableAmountLength;
+            var availableAmount = offerData.Range(index, intLength);
+            index += intLength;
 
             var previousOfferHash = offerData.Range(index, 32);
 
