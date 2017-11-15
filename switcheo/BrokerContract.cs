@@ -458,7 +458,7 @@ namespace switcheo
                 }
 
                 // Update the consuemd amount for this txn
-                Storage.Put(Storage.CurrentContext, currentTxn.Hash.Concat(assetID), consumedAmount + sentAmount);
+                Storage.Put(Storage.CurrentContext, currentTxn.Hash.Concat(assetID), consumedAmount + amount);
 
                 // TODO: how to cleanup?
                 return true;
