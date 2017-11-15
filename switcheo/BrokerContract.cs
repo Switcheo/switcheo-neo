@@ -545,9 +545,6 @@ namespace switcheo
             else
             {
                 Runtime.Log("Serializing offer..");
-                var offerAmount = offer.OfferAmount.AsByteArray();
-                var wantAmount = offer.WantAmount.AsByteArray();
-                var availableAmount = offer.AvailableAmount.AsByteArray();
 
                 // TODO: we can save storage space by not storing assetCategory / IDs?
                 var offerData = offer.MakerAddress
@@ -555,12 +552,9 @@ namespace switcheo
                                      .Concat(offer.WantAssetCategory)
                                      .Concat(offer.OfferAssetID)
                                      .Concat(offer.WantAssetID)
-                                     .Concat(Zeroes.Concat(((BigInteger)offerAmount.Length).AsByteArray()).Take(4))
-                                     .Concat(Zeroes.Concat(((BigInteger)wantAmount.Length).AsByteArray()).Take(4))
-                                     .Concat(Zeroes.Concat(((BigInteger)availableAmount.Length).AsByteArray()).Take(4))
-                                     .Concat(offerAmount)
-                                     .Concat(wantAmount)
-                                     .Concat(availableAmount)
+                                     .Concat(offer.OfferAmount.AsByteArray())
+                                     .Concat(offer.WantAmount.AsByteArray())
+                                     .Concat(offer.AvailableAmount.AsByteArray())
                                      .Concat(offer.PreviousOfferHash);
                 
                 Storage.Put(Storage.CurrentContext, offerHash, offerData);
