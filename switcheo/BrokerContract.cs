@@ -44,7 +44,7 @@ namespace switcheo
         // Flags
         private static readonly byte[] Empty = { };
         private static readonly byte[] Yes = { 0x01 };
-        private static readonly byte[] Zeroes = { 0x00, 0x00 }; // 32bits
+        private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
         private struct Offer
         {
@@ -543,9 +543,9 @@ namespace switcheo
                                      .Concat(offer.WantAssetCategory)
                                      .Concat(offer.OfferAssetID)
                                      .Concat(offer.WantAssetID)
-                                     .Concat(offer.OfferAmount.AsByteArray())
-                                     .Concat(offer.WantAmount.AsByteArray())
-                                     .Concat(offer.AvailableAmount.AsByteArray())
+                                     .Concat(offer.OfferAmount.AsByteArray().Concat(Zeroes).Take(8))
+                                     .Concat(offer.WantAmount.AsByteArray().Concat(Zeroes).Take(8))
+                                     .Concat(offer.AvailableAmount.AsByteArray().Concat(Zeroes).Take(8))
                                      .Concat(offer.PreviousOfferHash);
                 
                 Storage.Put(Storage.CurrentContext, offerHash, offerData);
