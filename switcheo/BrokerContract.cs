@@ -572,24 +572,14 @@ namespace switcheo
             else // Find the later offer 
             {
                 Runtime.Log("Searching for later offer..");
+                Offer search = GetOffer(head);
                 do // XXX: this may break stack limits (1024) - use a doubly linked list?
                 {
-                    Offer search = GetOffer(head);
                     Runtime.Log("Comparing offer hash..");
                     if (search.PreviousOfferHash == offerHash)
                     {
                         // Move the incoming edge from the later offer to the previous offer
                         Runtime.Log("Found offer");
-                        if (offer.PreviousOfferHash.Length > 0)
-                        {
-                            Runtime.Log("Moving edges..");
-                            search.PreviousOfferHash = offer.PreviousOfferHash;
-                        }
-                        else
-                        {
-                            Runtime.Log("Offer is the last in the list..");
-                            search.PreviousOfferHash = Empty;
-                        }
                         search.PreviousOfferHash = offer.PreviousOfferHash;
                         StoreOffer(head, search);
                         break;
