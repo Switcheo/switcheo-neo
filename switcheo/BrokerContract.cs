@@ -37,12 +37,6 @@ namespace switcheo
         private static readonly byte[] Active = { 0x01 };     // all operations active
         private static readonly byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawl & owner actions
 
-        // Storage Key Prefixes
-        private static readonly byte[] OfferDetailsPrefix = { 0x10 };
-        private static readonly byte[] OfferAmountPrefix = { 0x20 };
-        private static readonly byte[] WantAmountPrefix = { 0x30 };
-        private static readonly byte[] AvailableAmountPrefix = { 0x40 };
-
         // Asset Categories
         private static readonly byte[] SystemAsset = { 0x99 };
         private static readonly byte[] NEP5 = { 0x98 };
@@ -50,6 +44,7 @@ namespace switcheo
         // Flags
         private static readonly byte[] Empty = { };
         private static readonly byte[] Yes = { 0x01 };
+        private static readonly byte[] Zeroes = { 0x00, 0x00 }; // 32bits
 
         private struct Offer
         {
@@ -273,7 +268,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Check that nonce is not repeated
-            if (Storage.Get(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash)).Length != 0) return false;
+            if (Storage.Get(Storage.CurrentContext, offerHash).Length != 0) return false;
 
             // Check that the amounts > 0
             if (!(offer.OfferAmount > 0 && offer.WantAmount > 0)) return false;
@@ -484,24 +479,53 @@ namespace switcheo
         private static Offer GetOffer(byte[] hash)
         {
             Runtime.Log("Getting offer..");
-            var offerData = Storage.Get(Storage.CurrentContext, OfferDetailsPrefix.Concat(hash));
-            var offerAmount = Storage.Get(Storage.CurrentContext, OfferAmountPrefix.Concat(hash));
-            var wantAmount = Storage.Get(Storage.CurrentContext, WantAmountPrefix.Concat(hash));
-            var availableAmount = Storage.Get(Storage.CurrentContext, AvailableAmountPrefix.Concat(hash));
+            var offerData = Storage.Get(Storage.CurrentContext, hash);
 
             Runtime.Log("Checking if retrieved data is a valid offer..");
-            if (offerData.Length == 0 || offerAmount.Length == 0 || wantAmount.Length == 0 || availableAmount.Length == 0) return new Offer(); // invalid offer hash
+            if (offerData.Length == 0) return new Offer(); // invalid offer hash
 
-            Runtime.Log("Building offer..");
+            Runtime.Log("Deserializing offer..");
+            var index = 0;
+
+            var makerAddress = offerData.Range(index, 20);
+            index += 20;
+
             var offerAssetIDLength = 20;
             var wantAssetIDLength = 20;
-            if (offerData.Range(20, 2) == SystemAsset) offerAssetIDLength = 32;
-            if (offerData.Range(22, 2) == SystemAsset) wantAssetIDLength = 32;
+            var typeLength = 2;
+            var numPrefixLength = 4;
 
-            var makerAddress = offerData.Range(0, 20);
-            var offerAssetID = offerData.Range(24, offerAssetIDLength);
-            var wantAssetID = offerData.Range(24 + offerAssetIDLength, wantAssetIDLength);
-            var previousOfferHash = offerData.Range(24 + offerAssetIDLength + wantAssetIDLength, 32);
+            if (offerData.Range(index, typeLength) == SystemAsset) offerAssetIDLength = 32;
+            index += typeLength;
+
+            if (offerData.Range(index, typeLength) == SystemAsset) wantAssetIDLength = 32;
+            index += typeLength;
+
+            var offerAssetID = offerData.Range(index, offerAssetIDLength);
+            index += offerAssetIDLength;
+
+            var wantAssetID = offerData.Range(index, wantAssetIDLength);
+            index += wantAssetIDLength;
+
+            var offerAmountLength = (int)offerData.Range(index, numPrefixLength).AsBigInteger();
+            index += numPrefixLength;
+                
+            var wantAmountLength = (int)offerData.Range(index, numPrefixLength).AsBigInteger();
+            index += numPrefixLength;
+
+            var availableAmountLength = (int)offerData.Range(index, numPrefixLength).AsBigInteger();
+            index += numPrefixLength;
+
+            var offerAmount = offerData.Range(index, offerAmountLength);
+            index += offerAmountLength;
+
+            var wantAmount = offerData.Range(index, wantAmountLength);
+            index += wantAmountLength;
+
+            var availableAmount = offerData.Range(index, availableAmountLength);
+            index += availableAmountLength;
+
+            var previousOfferHash = offerData.Range(index, 32);
 
             Runtime.Log("Initializing offer..");
             return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash);
@@ -521,14 +545,25 @@ namespace switcheo
             else
             {
                 Runtime.Log("Serializing offer..");
+                var offerAmount = offer.OfferAmount.AsByteArray();
+                var wantAmount = offer.WantAmount.AsByteArray();
+                var availableAmount = offer.AvailableAmount.AsByteArray();
+
                 // TODO: we can save storage space by not storing assetCategory / IDs?
-                var offerData = offer.MakerAddress.Concat(offer.OfferAssetCategory).Concat(offer.WantAssetCategory).Concat(offer.OfferAssetID).Concat(offer.WantAssetID).Concat(offer.PreviousOfferHash);
-                Runtime.Log("Serializing amounts..");
-                // TODO: serialize these properly as a single key:
-                Storage.Put(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash), offerData);
-                Storage.Put(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash), offer.OfferAmount);
-                Storage.Put(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash), offer.WantAmount);
-                Storage.Put(Storage.CurrentContext, AvailableAmountPrefix.Concat(offerHash), offer.AvailableAmount);
+                var offerData = offer.MakerAddress
+                                     .Concat(offer.OfferAssetCategory)
+                                     .Concat(offer.WantAssetCategory)
+                                     .Concat(offer.OfferAssetID)
+                                     .Concat(offer.WantAssetID)
+                                     .Concat(Zeroes.Concat(((BigInteger)offerAmount.Length).AsByteArray()).Take(4))
+                                     .Concat(Zeroes.Concat(((BigInteger)wantAmount.Length).AsByteArray()).Take(4))
+                                     .Concat(Zeroes.Concat(((BigInteger)availableAmount.Length).AsByteArray()).Take(4))
+                                     .Concat(offerAmount)
+                                     .Concat(wantAmount)
+                                     .Concat(availableAmount)
+                                     .Concat(offer.PreviousOfferHash);
+                
+                Storage.Put(Storage.CurrentContext, offerHash, offerData);
             }
         }
 
@@ -600,10 +635,7 @@ namespace switcheo
             }
             
             // Delete offer data
-            Storage.Delete(Storage.CurrentContext, OfferDetailsPrefix.Concat(offerHash));
-            Storage.Delete(Storage.CurrentContext, OfferAmountPrefix.Concat(offerHash));
-            Storage.Delete(Storage.CurrentContext, WantAmountPrefix.Concat(offerHash));
-            Storage.Delete(Storage.CurrentContext, AvailableAmountPrefix.Concat(offerHash));
+            Storage.Delete(Storage.CurrentContext, offerHash);
         }
 
         private static bool WithdrawingSystemAsset()
@@ -647,12 +679,6 @@ namespace switcheo
             else Storage.Delete(Storage.CurrentContext, key);
         }
 
-        private static byte[] ToBytes(BigInteger value)
-        {
-            byte[] buffer = value.ToByteArray();
-            return buffer;
-        }
-
         private static BigInteger AmountToOffer(Offer o, BigInteger amount)
         {
             return (o.OfferAmount * amount) / o.WantAmount;
@@ -670,13 +696,10 @@ namespace switcheo
 
         private static byte[] Hash(Offer o, byte[] nonce)
         {
-            var offerAmountBuffer = ToBytes(o.OfferAmount);
-            var wantAmountBuffer = ToBytes(o.WantAmount);
-
             var bytes = o.MakerAddress
                 .Concat(TradingPair(o))
-                .Concat(offerAmountBuffer)
-                .Concat(wantAmountBuffer)
+                .Concat(o.OfferAmount.AsByteArray())
+                .Concat(o.WantAmount.AsByteArray())
                 .Concat(nonce);
 
             return Hash256(bytes);
