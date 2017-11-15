@@ -7,7 +7,8 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
-        [Appcall("3a5ae8c529a96007831e1fdcae1bff3af35548dc")] // TODO: Hardcode RPX ScriptHash - pending [DynamicCall] support
+        // TODO: Hardcode RPX ScriptHash - pending [DynamicCall] support
+        [Appcall("3a5ae8c529a96007831e1fdcae1bff3af35548dc")]
         public static extern object CallExternalContract(string method, params object[] args);
 
         //[DisplayName("created")]
@@ -25,10 +26,11 @@ namespace switcheo
         //[DisplayName("withdrawn")]
         //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
+        // TODO: Update and test this:
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
         //private const ulong assetFactor = 100000000;
-        private const ulong feeFactor = 100000; // 1 => 0.001%
-        private const int maxFee = 3000; // 3000/10000 = 0.3%
+        private const ulong feeFactor = 1000000; // 1 => 0.0001%
+        private const int maxFee = 3000; // 3000/1000000 = 0.3%
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
