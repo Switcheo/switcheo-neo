@@ -31,7 +31,6 @@ namespace switcheo
         //[DisplayName("withdrawn")]
         //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
-        // TODO: Update and test this:
         private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
@@ -45,11 +44,11 @@ namespace switcheo
         private static readonly byte[] SystemAsset = { 0x99 };
         private static readonly byte[] NEP5 = { 0x98 };
         
-        // Flags / Byte Constatns
+        // Flags / Byte Constants
         private static readonly byte[] Empty = { };
         private static readonly byte[] Yes = { 0x01 };
-        private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8
-        private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for list ptr
+        private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
+        private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)
 
         private struct Offer
         {
@@ -63,13 +62,15 @@ namespace switcheo
             public BigInteger AvailableAmount;
             public byte[] Nonce;
             public byte[] PreviousOfferHash; // in same trading pair
+            public byte[] NextOfferHash;     // in same trading pair
         }
 
         private static Offer NewOffer(
             byte[] makerAddress,
             byte[] offerAssetID, byte[] offerAmount,
             byte[] wantAssetID,  byte[] wantAmount,
-            byte[] availableAmount, byte[] previousOfferHash
+            byte[] availableAmount, 
+            byte[] previousOfferHash, byte[] nextOfferHash
         )
         {
             var offerAssetCategory = NEP5;
@@ -88,6 +89,7 @@ namespace switcheo
                 WantAmount = wantAmount.AsBigInteger(),
                 AvailableAmount = availableAmount.AsBigInteger(),
                 PreviousOfferHash = previousOfferHash,
+                NextOfferHash = nextOfferHash
             };
         }
 
@@ -109,7 +111,7 @@ namespace switcheo
             {
                 // == Withdrawal of SystemAsset ==
                 // Check that the TransactionAttribute has been set to signify deduction during Application phase
-                // XXX: There is no currently way to check that this contract is invoked from the verification phase
+                // TODO: Implement double withdrawal checking
                 if (!WithdrawingSystemAsset()) return false;
 
                 // Verify that each output is allowed
@@ -130,7 +132,7 @@ namespace switcheo
                 Runtime.Log("Application trigger");
 
                 // == Withdrawal of SystemAsset ==
-                // XXX: can the vm be crashed after verification by manipulating the invoke AppCall args?
+                // TODO: ensure the vm will not crash after verification by manipulating the invoke AppCall args
                 if (WithdrawingSystemAsset())
                 {
                     var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
@@ -167,7 +169,7 @@ namespace switcheo
                         return false;
                     }
                     if (args.Length != 6) return false;
-                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], null);
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], Null, Null);
                     var offerHash = Hash(offer, (byte[])args[5]);
 
                     if (VerifyOffer(offerHash, offer))
@@ -499,6 +501,7 @@ namespace switcheo
             var wantAssetIDLength = 20;
             var typeLength = 2;
             var intLength = 8;
+            var orderHashLength = 32;
 
             if (offerData.Range(index, typeLength) == SystemAsset) offerAssetIDLength = 32;
             index += typeLength;
@@ -521,10 +524,14 @@ namespace switcheo
             var availableAmount = offerData.Range(index, intLength);
             index += intLength;
 
-            var previousOfferHash = offerData.Range(index, 32);
+            var previousOfferHash = offerData.Range(index, orderHashLength);
+            index += orderHashLength;
+
+            var nextOfferHash = offerData.Range(index, orderHashLength);
+            index += orderHashLength;
 
             Runtime.Log("Initializing offer..");
-            return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash);
+            return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash, nextOfferHash);
         }
 
         private static void StoreOffer(byte[] offerHash, Offer offer)
@@ -542,7 +549,7 @@ namespace switcheo
             {
                 Runtime.Log("Serializing offer..");
 
-                // TODO: we can save storage space by not storing assetCategory / IDs?
+                // TODO: we can save storage space by not storing assetCategory / IDs and force clients to walk the list
                 var offerData = offer.MakerAddress
                                      .Concat(offer.OfferAssetCategory)
                                      .Concat(offer.WantAssetCategory)
@@ -551,7 +558,8 @@ namespace switcheo
                                      .Concat(offer.OfferAmount.AsByteArray().Concat(Zeroes).Take(8))
                                      .Concat(offer.WantAmount.AsByteArray().Concat(Zeroes).Take(8))
                                      .Concat(offer.AvailableAmount.AsByteArray().Concat(Zeroes).Take(8))
-                                     .Concat(offer.PreviousOfferHash);
+                                     .Concat(offer.PreviousOfferHash)
+                                     .Concat(offer.NextOfferHash);
                 
                 Storage.Put(Storage.CurrentContext, offerHash, offerData);
             }
@@ -562,18 +570,21 @@ namespace switcheo
             var tradingPair = TradingPair(offer);
             var previousOfferHash = Storage.Get(Storage.CurrentContext, tradingPair);
 
-            // Add an edge to the previous HEAD of the linked list for this trading pair
-            if (previousOfferHash.Length > 0)
+            // Add edges to the previous HEAD of the linked list for this trading pair
+            if (previousOfferHash != Null)
             {
-                Runtime.Log("Setting previous offer hash..");
+                Runtime.Log("Setting edges..");
                 offer.PreviousOfferHash = previousOfferHash;
+                var previousOffer = GetOffer(previousOfferHash);
+                previousOffer.NextOfferHash = offerHash;
+                StoreOffer(previousOfferHash, previousOffer); 
             }
 
             // Set the HEAD of the linked list for this trading pair as this offer
             Storage.Put(Storage.CurrentContext, tradingPair, offerHash);
 
-            // Store the offer
-            StoreOffer(offerHash, offer);            
+            // Store the new offer
+            StoreOffer(offerHash, offer);
         }
 
         private static void RemoveOffer(byte[] offerHash, Offer offer)
@@ -581,47 +592,35 @@ namespace switcheo
             Runtime.Log("Removing offer..");
 
             var tradingPair = TradingPair(offer);
-
             byte[] head = Storage.Get(Storage.CurrentContext, tradingPair);
-            if (head == offerHash) // This offer is the HEAD - simple case!
-            {                
-                // Set the new HEAD of the linked list to the previous offer if there is one
-                if (offer.PreviousOfferHash.Length > 0)
+
+            // Check if the offer is at the HEAD of the linked list
+            if (head == offerHash) 
+            {             
+                // There are more offers in this list so set the new HEAD of the linked list to the previous offer
+                if (offer.PreviousOfferHash != Null)
                 {
                     Storage.Put(Storage.CurrentContext, tradingPair, offer.PreviousOfferHash);
                 }
-                // Remove the list HEAD since this was the only offer left
+                // Otherwise, just remove the whole list since this is the only offer left
                 else
                 {
                     Storage.Delete(Storage.CurrentContext, tradingPair);
                 }
             }
-            else // Find the later offer 
+
+            Runtime.Log("Combining edges..");
+            if (offer.NextOfferHash != Null)
             {
-                Runtime.Log("Searching for later offer..");
-                Offer search = GetOffer(head);
-                do // XXX: this may break stack limits (1024) - use a doubly linked list?
-                {
-                    Runtime.Log("Comparing offer hash..");
-                    if (search.PreviousOfferHash == offerHash)
-                    {
-                        // Move the incoming edge from the later offer to the previous offer
-                        Runtime.Log("Found offer");
-                        search.PreviousOfferHash = offer.PreviousOfferHash;
-                        StoreOffer(head, search);
-                        break;
-                    }
-                    else if (search.PreviousOfferHash.Length > 0)
-                    {
-                        Runtime.Log("Moving search ptr");
-                        search = GetOffer(search.PreviousOfferHash);
-                    }
-                    else
-                    {
-                        Runtime.Log("Could not find offer in list any longer!");
-                        break;
-                    }
-                } while (true);
+                var nextOffer = GetOffer(offer.NextOfferHash);
+                nextOffer.PreviousOfferHash = offer.PreviousOfferHash;
+                StoreOffer(offer.NextOfferHash, nextOffer);
+            }
+            if (offer.PreviousOfferHash != Null)
+            {
+                var previousOffer = GetOffer(offer.PreviousOfferHash);
+                previousOffer.NextOfferHash = offer.NextOfferHash;
+                StoreOffer(offer.PreviousOfferHash, previousOffer);
             }
             
             // Delete offer data
