@@ -32,7 +32,7 @@ namespace switcheo
         //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         // TODO: Update and test this:
-        private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
+        private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
 
