@@ -32,9 +32,9 @@ namespace switcheo
         //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
-        private static readonly byte[] PrivRPX = { 58, 90, 232, 197, 41, 169, 96, 7, 131, 30, 31, 220, 174, 27, 255, 58, 243, 85, 72, 220 };
-        private static readonly byte[] TestRPX = { 91, 112, 116, 232, 115, 151, 58, 110, 211, 112, 136, 98, 242, 25, 166, 251, 244, 209, 196, 17 };
-        private static readonly byte[] TestBOA = { 215, 103, 141, 217, 124, 0, 11, 227, 243, 62, 147, 98, 230, 115, 16, 27, 172, 76, 166, 84 };
+        private static readonly byte[] PrivRPX = { 220, 72, 85, 243, 58, 255, 27, 174, 220, 31, 30, 131, 7, 96, 169, 41, 197, 232, 90, 58 };
+        private static readonly byte[] TestRPX = { 17, 196, 209, 244, 251, 166, 25, 242, 98, 136, 112, 211, 110, 58, 151, 115, 232, 116, 112, 91 };
+        private static readonly byte[] TestBOA = { 84, 166, 76, 172, 27, 16, 115, 230, 98, 147, 62, 243, 227, 11, 0, 124, 217, 141, 103, 215 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
 
