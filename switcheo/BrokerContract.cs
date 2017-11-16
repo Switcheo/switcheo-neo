@@ -32,6 +32,9 @@ namespace switcheo
         //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
+        private static readonly byte[] PrivRPX = { 58, 90, 232, 197, 41, 169, 96, 7, 131, 30, 31, 220, 174, 27, 255, 58, 243, 85, 72, 220 };
+        private static readonly byte[] TestRPX = { 91, 112, 116, 232, 115, 151, 58, 110, 211, 112, 136, 98, 242, 25, 166, 251, 244, 209, 196, 17 };
+        private static readonly byte[] TestBOA = { 215, 103, 141, 217, 124, 0, 11, 227, 243, 62, 147, 98, 230, 115, 16, 27, 172, 76, 166, 84 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
 
@@ -288,24 +291,11 @@ namespace switcheo
                 (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
 
             // Verify that the offer txn has really has the indicated assets available
-            return VerifySentAmount(offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
+            return VerifySentAmount(offer.MakerAddress, offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
         }
 
         private static bool MakeOffer(byte[] offerHash, Offer offer)
         {
-            // Transfer NEP-5 token if required
-            if (offer.OfferAssetCategory == NEP5)
-            {
-                Runtime.Log("Transferring NEP-5 token..");
-                bool transferSuccessful = (bool)CallExternalContract(offer.OfferAssetID, "transfer",
-                                                                     offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, 
-                                                                     offer.OfferAmount.AsByteArray());
-                if (!transferSuccessful) {
-                    Runtime.Log("Failed to transfer NEP-5 tokens!");
-                    return false;
-                }
-            }
-
             AddOffer(offerHash, offer);
 
             // Notify runtime
@@ -330,7 +320,7 @@ namespace switcheo
             if (amountToOffer > offer.AvailableAmount || amountToOffer < 1) return false;
 
             // Verify that the filling txn really has the required assets available
-            return VerifySentAmount(offer.WantAssetID, offer.WantAssetCategory, amountToFill);
+            return VerifySentAmount(fillerAddress, offer.WantAssetID, offer.WantAssetCategory, amountToFill);
         }
 
         private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
@@ -406,8 +396,7 @@ namespace switcheo
             // Transfer token
             Runtime.Log("Transferring NEP-5 token..");
             bool transferSuccessful = (bool)CallExternalContract(assetID, "transfer", 
-                                                                 ExecutionEngine.ExecutingScriptHash, holderAddress, 
-                                                                 amount.AsByteArray());
+                                                                 ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
             if (!transferSuccessful)
             {
                 Runtime.Log("Failed to transfer NEP-5 tokens!");
@@ -442,7 +431,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool VerifySentAmount(byte[] assetID, byte[] assetCategory, BigInteger amount)
+        private static bool VerifySentAmount(byte[] originator, byte[] assetID, byte[] assetCategory, BigInteger amount)
         {
             // Verify that the offer really has the indicated assets available
             if (assetCategory == SystemAsset)
@@ -469,7 +458,7 @@ namespace switcheo
                     return false;   
                 }
 
-                // Update the consuemd amount for this txn
+                // Update the consumed amount for this txn
                 Storage.Put(Storage.CurrentContext, currentTxn.Hash.Concat(assetID), consumedAmount + amount);
 
                 // TODO: how to cleanup?
@@ -477,13 +466,13 @@ namespace switcheo
             }
             else if (assetCategory == NEP5)
             {
-                // Just skip this check and fail later if the transfer fails - saves gas cost and supports old NEP-5 standard
-
-                // Check allowance on smart contract
-                //Runtime.Log("Verifying NEP-5 token..");
-                //BigInteger allowedAmount = (BigInteger)CallExternalContract("allowance", originator, ExecutionEngine.ExecutingScriptHash);
-                //Runtime.Log("Checking allowance..");
-                //if (allowedAmount < amount) return false;
+                // Just transfer immediately or fail as this is the last step in verification
+                var transferSuccessful = (bool)CallExternalContract(assetID, "transfer", originator, ExecutionEngine.ExecutingScriptHash, amount);
+                if (!transferSuccessful)
+                {
+                    Runtime.Log("Failed to transfer NEP-5 tokens!");
+                    return false;
+                }
                 return true;
             }
 
@@ -678,10 +667,11 @@ namespace switcheo
 
         private static object CallExternalContract(byte[] contract, string method, params object[] args)
         {
-            Runtime.Log("Calling: " + contract.AsString());
-            if (contract.AsString() == "3a5ae8c529a96007831e1fdcae1bff3af35548dc") return CallPrivRPXContract(method, args);
-            if (contract.AsString() == "5b7074e873973a6ed3708862f219a6fbf4d1c411") return CallTestRPXContract(method, args);
-            if (contract.AsString() == "d7678dd97c000be3f33e9362e673101bac4ca654") return CallTestBOAContract(method, args);
+            if (contract == PrivRPX) return CallPrivRPXContract(method, args);
+            if (contract == TestRPX) return CallTestRPXContract(method, args);
+            if (contract == TestBOA) return CallTestBOAContract(method, args);
+
+            Runtime.Log("Invalid contract scriptHash!");
             return false;
         }
 
