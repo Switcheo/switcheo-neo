@@ -297,7 +297,9 @@ namespace switcheo
             if (offer.OfferAssetCategory == NEP5)
             {
                 Runtime.Log("Transferring NEP-5 token..");
-                bool transferSuccessful = (bool)CallExternalContract(offer.OfferAssetID, "transfer", offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
+                bool transferSuccessful = (bool)CallExternalContract(offer.OfferAssetID, "transfer",
+                                                                     offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, 
+                                                                     offer.OfferAmount.AsByteArray());
                 if (!transferSuccessful) {
                     Runtime.Log("Failed to transfer NEP-5 tokens!");
                     return false;
@@ -403,8 +405,14 @@ namespace switcheo
         {
             // Transfer token
             Runtime.Log("Transferring NEP-5 token..");
-            bool transferSuccessful = (bool)CallExternalContract(assetID, "transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
-            if (!transferSuccessful) return false;
+            bool transferSuccessful = (bool)CallExternalContract(assetID, "transfer", 
+                                                                 ExecutionEngine.ExecutingScriptHash, holderAddress, 
+                                                                 amount.AsByteArray());
+            if (!transferSuccessful)
+            {
+                Runtime.Log("Failed to transfer NEP-5 tokens!");
+                return false;
+            }
 
             Runtime.Log("Reducing balance..");
             ReduceBalance(holderAddress, assetID, amount);
