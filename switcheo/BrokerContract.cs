@@ -110,6 +110,11 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
+            if (Storage.Get(Storage.CurrentContext, "state") == Pending && operation != "initialize") {
+                Runtime.Log("Contract not initialized!");
+                return false;
+            }
+
             if (Runtime.Trigger == TriggerType.Verification)
             {
                 // == Withdrawal of SystemAsset ==
