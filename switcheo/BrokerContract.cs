@@ -7,9 +7,14 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
-        // TODO: Hardcode RPX ScriptHash - pending [DynamicCall] support
         [Appcall("3a5ae8c529a96007831e1fdcae1bff3af35548dc")]
-        public static extern object CallExternalContract(string method, params object[] args);
+        public static extern object CallPrivRPXContract(string method, params object[] args);
+
+        [Appcall("5b7074e873973a6ed3708862f219a6fbf4d1c411")]
+        public static extern object CallTestRPXContract(string method, params object[] args);
+
+        [Appcall("d7678dd97c000be3f33e9362e673101bac4ca654")]
+        public static extern object CallTestBOAContract(string method, params object[] args);
 
         //[DisplayName("created")]
         //public static event Action<byte[]> Created; // (offerHash)
@@ -28,7 +33,6 @@ namespace switcheo
 
         // TODO: Update and test this:
         private static readonly byte[] Owner = { 2, 86, 121, 88, 238, 62, 78, 230, 177, 3, 68, 142, 10, 254, 31, 223, 139, 87, 150, 110, 30, 135, 156, 120, 59, 17, 101, 55, 236, 191, 90, 249, 113 };
-        //private const ulong assetFactor = 100000000;
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
 
@@ -41,10 +45,11 @@ namespace switcheo
         private static readonly byte[] SystemAsset = { 0x99 };
         private static readonly byte[] NEP5 = { 0x98 };
         
-        // Flags
+        // Flags / Byte Constatns
         private static readonly byte[] Empty = { };
         private static readonly byte[] Yes = { 0x01 };
-        private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8
+        private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for list ptr
 
         private struct Offer
         {
@@ -290,7 +295,7 @@ namespace switcheo
             if (offer.OfferAssetCategory == NEP5)
             {
                 Runtime.Log("Transferring NEP-5 token..");
-                bool transferSuccessful = (bool)CallExternalContract("transfer", offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
+                bool transferSuccessful = (bool)CallExternalContract(offer.OfferAssetID, "transfer", offer.MakerAddress, ExecutionEngine.ExecutingScriptHash, offer.OfferAmount);
                 if (!transferSuccessful) {
                     Runtime.Log("Failed to transfer NEP-5 tokens!");
                     return false;
@@ -396,7 +401,7 @@ namespace switcheo
         {
             // Transfer token
             Runtime.Log("Transferring NEP-5 token..");
-            bool transferSuccessful = (bool)CallExternalContract("transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
+            bool transferSuccessful = (bool)CallExternalContract(assetID, "transfer", ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
             if (!transferSuccessful) return false;
 
             Runtime.Log("Reducing balance..");
@@ -662,6 +667,15 @@ namespace switcheo
             var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             if (currentBalance - amount > 0) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
             else Storage.Delete(Storage.CurrentContext, key);
+        }
+
+        private static object CallExternalContract(byte[] contract, string method, params object[] args)
+        {
+            Runtime.Log("Calling: " + contract.AsString());
+            if (contract.AsString() == "3a5ae8c529a96007831e1fdcae1bff3af35548dc") return CallPrivRPXContract(method, args);
+            if (contract.AsString() == "5b7074e873973a6ed3708862f219a6fbf4d1c411") return CallTestRPXContract(method, args);
+            if (contract.AsString() == "d7678dd97c000be3f33e9362e673101bac4ca654") return CallTestBOAContract(method, args);
+            return false;
         }
 
         private static BigInteger AmountToOffer(Offer o, BigInteger amount)
