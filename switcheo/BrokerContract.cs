@@ -1,6 +1,8 @@
 ﻿using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
 using Neo.SmartContract.Framework.Services.System;
+using System;
+using System.ComponentModel;
 using System.Numerics;
 
 namespace switcheo
@@ -10,20 +12,20 @@ namespace switcheo
 
         public delegate object NEP5Contract(string method, object[] args);
 
-        //[DisplayName("created")]
-        //public static event Action<byte[]> Created; // (offerHash)
+        [DisplayName("created")]
+        public static event Action<byte[]> Created; // (offerHash)
 
-        //[DisplayName("filled")]
-        //public static event Action<byte[], BigInteger> Filled; // (offerHash, amount)
+        [DisplayName("filled")]
+        public static event Action<byte[], BigInteger> Filled; // (offerHash, amount)
 
-        //[DisplayName("cancelled")]
-        //public static event Action<byte[]> Cancelled; // (offerHash)
+        [DisplayName("cancelled")]
+        public static event Action<byte[]> Cancelled; // (offerHash)
 
-        //[DisplayName("transferred")]
-        //public static event Action<byte[], byte[], BigInteger> Transferred; // (address, assetID, amount)
+        [DisplayName("transferred")]
+        public static event Action<byte[], byte[], BigInteger> Transferred; // (address, assetID, amount)
 
-        //[DisplayName("withdrawn")]
-        //public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
+        [DisplayName("withdrawn")]
+        public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
         private static readonly byte[] PrivRPX = { 220, 72, 85, 243, 58, 255, 27, 174, 220, 31, 30, 131, 7, 96, 169, 41, 197, 232, 90, 58 };
@@ -45,8 +47,7 @@ namespace switcheo
         private static readonly byte[] Empty = { };
         private static readonly byte[] Yes = { 0x01 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
-        private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)
-        
+        private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
 
         private struct Offer
         {
@@ -131,8 +132,6 @@ namespace switcheo
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
-                Runtime.Log("Application trigger");
-
                 // == Withdrawal of SystemAsset ==
                 // TODO: ensure the vm will not crash after verification by manipulating the invoke AppCall args
                 if (WithdrawingSystemAsset())
@@ -256,12 +255,10 @@ namespace switcheo
 
         private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
         {
-            Runtime.Log("Checking state..");
             if (Storage.Get(Storage.CurrentContext, "state") != Pending) return false;
             if (!SetFees(takerFee, makerFee)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
-
-            Runtime.Log("Initialized!");
+            
             Storage.Put(Storage.CurrentContext, "state", Active);
             return true;
         }
@@ -295,10 +292,11 @@ namespace switcheo
 
         private static bool MakeOffer(byte[] offerHash, Offer offer)
         {
+            // Add the offer to storage
             AddOffer(offerHash, offer);
 
-            // Notify runtime
-            Runtime.Log("Offer made successfully!");
+            // Notify clients
+            Created(offerHash);
             return true;
         }
 
@@ -338,13 +336,13 @@ namespace switcheo
             TransferAssetTo(Owner, offer.WantAssetID, makerFee);
             TransferAssetTo(Owner, offer.OfferAssetID, takerFee);
 
-            // Move asset to the maker balance
+            // Move asset to the maker balance and notify clients
             TransferAssetTo(offer.MakerAddress, offer.WantAssetID, amountToFill - makerFee);
-            //Transferred(offer.MakerAddress, offer.WantAssetID, (byte) offer.WantAssetCategory, amountToFill - makerFee);
+            Transferred(offer.MakerAddress, offer.WantAssetID, amountToFill - makerFee);
 
-            // Move asset to the taker balance
+            // Move asset to the taker balance and notify clients
             TransferAssetTo(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
-            //Transferred(fillerAddress, offer.OfferAssetID, (byte)offer.OfferAssetCategory, amountToOffer - takerFee);
+            Transferred(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToOffer;
@@ -352,8 +350,8 @@ namespace switcheo
             // Store updated offer
             StoreOffer(offerHash, offer);
 
-            // Notify runtime
-            Runtime.Log("Offer filled successfully!");
+            // Notify clients
+            Filled(offerHash, amountToFill);
             return true;
         }
 
@@ -375,14 +373,13 @@ namespace switcheo
             RemoveOffer(offerHash, offer);
 
             // Notify runtime
-            Runtime.Log("Offer cancelled successfully!");
+            Cancelled(offerHash);
             return true;
         }
         
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Check that there are asset value > 0 in balance
-            Runtime.Log("Checking asset value..");
             var key = StoreKey(holderAddress, assetID);
             var balance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             if (balance < amount) return false;
@@ -393,8 +390,6 @@ namespace switcheo
         private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Transfer token
-            Runtime.Log("Transferring NEP-5 token..");
-
             var contract = (NEP5Contract)assetID.ToDelegate();
             bool transferSuccessful = (bool)contract("transfer", new object[] { ExecutionEngine.ExecutingScriptHash, holderAddress, amount });
             if (!transferSuccessful)
@@ -402,17 +397,18 @@ namespace switcheo
                 Runtime.Log("Failed to transfer NEP-5 tokens!");
                 return false;
             }
-
-            Runtime.Log("Reducing balance..");
+            
+            // Reduce balance in storage
             ReduceBalance(holderAddress, assetID, amount);
 
-            Runtime.Log("Assets withdrawn successfully!");
+            // Notify clients
+            Withdrawn(holderAddress, assetID, amount);
+
             return true;
         }
 
         private static bool SetFees(BigInteger takerFee, BigInteger makerFee)
         {
-            Runtime.Log("Setting fees..");
             if (takerFee > maxFee || makerFee > maxFee) return false;
             if (takerFee < 0 || makerFee < 0) return false;
 
@@ -424,7 +420,6 @@ namespace switcheo
 
         private static bool SetFeeAddress(byte[] feeAddress)
         {
-            Runtime.Log("Setting fee address..");
             if (feeAddress.Length != 20) return false;
             Storage.Put(Storage.CurrentContext, "feeAddress", feeAddress);
 
@@ -437,7 +432,6 @@ namespace switcheo
             if (assetCategory == SystemAsset)
             {
                 // Check the current transaction for the system assets
-                Runtime.Log("Verifying SystemAsset amount..");
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 var outputs = currentTxn.GetOutputs();
                 ulong sentAmount = 0;
@@ -483,13 +477,11 @@ namespace switcheo
 
         private static Offer GetOffer(byte[] hash)
         {
-            Runtime.Log("Getting offer..");
+            // Check that offer exists
             var offerData = Storage.Get(Storage.CurrentContext, hash);
-
-            Runtime.Log("Checking if retrieved data is a valid offer..");
             if (offerData.Length == 0) return new Offer(); // invalid offer hash
 
-            Runtime.Log("Deserializing offer..");
+            // Deserialize offer
             var index = 0;
 
             var makerAddress = offerData.Range(index, 20);
@@ -528,25 +520,20 @@ namespace switcheo
             var nextOfferHash = offerData.Range(index, orderHashLength);
             index += orderHashLength;
 
-            Runtime.Log("Initializing offer..");
             return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash, nextOfferHash);
         }
 
         private static void StoreOffer(byte[] offerHash, Offer offer)
         {
-            Runtime.Log("Storing offer..");
-
             // Remove offer if completely filled
             if (offer.AvailableAmount == 0)
             {
-                Runtime.Log("Removing depleted offer..");
                 RemoveOffer(offerHash, offer);
             }
             // Store offer otherwise
             else
             {
-                Runtime.Log("Serializing offer..");
-
+                // Serialize offer
                 // TODO: we can save storage space by not storing assetCategory / IDs and force clients to walk the list
                 var offerData = offer.MakerAddress
                                      .Concat(offer.OfferAssetCategory)
@@ -571,7 +558,6 @@ namespace switcheo
             // Add edges to the previous HEAD of the linked list for this trading pair
             if (previousOfferHash != Null)
             {
-                Runtime.Log("Setting edges..");
                 offer.PreviousOfferHash = previousOfferHash;
                 var previousOffer = GetOffer(previousOfferHash);
                 previousOffer.NextOfferHash = offerHash;
@@ -587,8 +573,7 @@ namespace switcheo
 
         private static void RemoveOffer(byte[] offerHash, Offer offer)
         {
-            Runtime.Log("Removing offer..");
-
+            // Get the first item (head) in order book
             var tradingPair = TradingPair(offer);
             byte[] head = Storage.Get(Storage.CurrentContext, tradingPair);
 
@@ -607,7 +592,7 @@ namespace switcheo
                 }
             }
 
-            Runtime.Log("Combining edges..");
+            // Combine nodes with an bi-directional edge
             if (offer.NextOfferHash != Null)
             {
                 var nextOffer = GetOffer(offer.NextOfferHash);
@@ -627,9 +612,11 @@ namespace switcheo
 
         private static bool WithdrawingSystemAsset()
         {
+            // Check that transaction is an Invocation transaction
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             if (currentTxn.Type != 0xd1) return false;
 
+            // Check that the transaction is marked as a SystemAsset withdrawal
             var txnAttributes = currentTxn.GetAttributes();
             foreach (var attr in txnAttributes)
             {
