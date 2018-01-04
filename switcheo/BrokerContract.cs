@@ -33,6 +33,7 @@ namespace switcheo
         private static readonly byte[] TestBOA = { 84, 166, 76, 172, 27, 16, 115, 230, 98, 147, 62, 243, 227, 11, 0, 124, 217, 141, 103, 215 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
+        private const int maxWithdrawBlocks = 100; // max num of blocks allowed between preparation & withdrawal
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -46,6 +47,7 @@ namespace switcheo
         // Flags / Byte Constants
         private static readonly byte[] Empty = { };
         private static readonly byte[] Yes = { 0x01 };
+        private static readonly byte[] Withdrawing = { 0x50 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
 
@@ -113,42 +115,58 @@ namespace switcheo
             if (Runtime.Trigger == TriggerType.Verification)
             {
                 // == Withdrawal of SystemAsset ==
-                // Check that the TransactionAttribute has been set to signify deduction during Application phase
-                // TODO: Implement double withdrawal checking
-                if (!WithdrawingSystemAsset()) return false;
+                // Check that the TransactionAttribute has been set to signify deduction for double withdrawal checks
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                if (!IsWithdrawingSystemAsset(currentTxn)) return false;
+
+                // Get the withdrawing address
+                var withdrawingAddr = GetWithdrawalAddress(currentTxn);
 
                 // Verify that each output is allowed
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 var outputs = currentTxn.GetOutputs();
+                ulong totalOut = 0;
                 foreach (var o in outputs)
                 {
-                    if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash && 
-                        !VerifyWithdrawal(o.ScriptHash, o.AssetId, o.Value)) return false;
+                    // Get amount for each asset
+                    var amount = GetAmountForAssetInOutputs(o.AssetId, outputs);
+                    // Verify that the output address owns the balance 
+                    if (!VerifyWithdrawal(withdrawingAddr, o.AssetId, amount)) return false;
+                    // Accumulate total for checking against inputs later
+                    totalOut += (ulong)o.Value;
                 }
 
-                // TODO: ensure that gas isn't burnt?
+                // Check that all previous withdrawals has been cleared (SC amounts have been updated through invoke)
+                var startOfWithdrawal = Storage.Get(Storage.CurrentContext, WithdrawalKey(withdrawingAddr)).AsBigInteger();
+                var currentHeight = Blockchain.GetHeight();
+
+                // Check that start of withdrawal was initiated and within the allowed bounds (DOS protection)
+                if (startOfWithdrawal == 0) return false;
+                if (startOfWithdrawal + maxWithdrawBlocks > currentHeight) return false;
+
+                // Check that withdrawal was not already done
+                for (var i = startOfWithdrawal; i < currentHeight; i++)
+                {
+                    var block = Blockchain.GetBlock((uint)i);
+                    var txns = block.GetTransactions();
+                    foreach (var transaction in txns)
+                    {
+                        // Since this is flagged as a withdrawal, and it is signed by the withdrawing user,
+                        // we know that an withdrawal has been executed without a corresponding
+                        // application invocation.
+                        if (IsWithdrawingSystemAsset(transaction) &&
+                            GetWithdrawalAddress(transaction) == withdrawingAddr) return false;
+                    }
+                }
+
+                // Ensure that nothing is burnt
+                ulong totalIn = 0;
+                foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
+                if (totalIn != totalOut) return false;
 
                 return true;
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
-                // == Withdrawal of SystemAsset ==
-                // TODO: ensure the vm will not crash after verification by manipulating the invoke AppCall args
-                if (WithdrawingSystemAsset())
-                {
-                    var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                    var outputs = currentTxn.GetOutputs();
-                    foreach (var o in outputs)
-                    {
-                        if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash)
-                        {
-                            Runtime.Log("Found a withdrawal..");
-                            ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
-                        }
-                    }
-                    // return true;
-                }
-
                 // == Init ==
                 if (operation == "initialize")
                 {
@@ -218,9 +236,28 @@ namespace switcheo
                     else
                     {
                         Runtime.Log("Withdrawal is invalid!");
+                        return false;
                     }
                 }
-
+                if (operation == "prepareAssetWithdrawal")
+                {
+                    if (args.Length != 1) return false;
+                    return PrepareAssetWithdrawal((byte[])args[0]);
+                }
+                if (operation == "completeAssetWithdrawal") // SystemAsset only
+                {
+                    var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                    var outputs = currentTxn.GetOutputs();
+                    foreach (var o in outputs)
+                    {
+                        if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash)
+                        {
+                            Runtime.Log("Found a withdrawal..");
+                            ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
+                        }
+                    }
+                    return true;
+                }
 
                 // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
@@ -403,6 +440,23 @@ namespace switcheo
 
             // Notify clients
             Withdrawn(holderAddress, assetID, amount);
+
+            return true;
+        }
+
+        private static bool PrepareAssetWithdrawal(byte[] holderAddress)
+        {
+            // Check that transaction is signed by the asset holder
+            if (!Runtime.CheckWitness(holderAddress)) return false;
+
+            // Get the key which marks start of withdrawal process
+            var withdrawalKey = WithdrawalKey(holderAddress);
+            
+            // Check if already withdrawing
+            if (Storage.Get(Storage.CurrentContext, withdrawalKey).Length != 0) return false;
+
+            // Set blockheight from which to check for double withdrawals later on
+            Storage.Put(Storage.CurrentContext, withdrawalKey, Blockchain.GetHeight());
 
             return true;
         }
@@ -610,14 +664,36 @@ namespace switcheo
             Storage.Delete(Storage.CurrentContext, offerHash);
         }
 
-        private static bool WithdrawingSystemAsset()
+        private static ulong GetAmountForAssetInOutputs(byte[] assetID, TransactionOutput[] outputs)
+        {
+            ulong amount = 0;
+            foreach (var o in outputs)
+            {
+                if (o.AssetId == assetID && o.ScriptHash != ExecutionEngine.ExecutingScriptHash) amount += (ulong)o.Value;
+            }
+
+            return amount;
+        }
+
+        private static byte[] GetWithdrawalAddress(Transaction transaction)
+        {
+            var txnAttributes = transaction.GetAttributes();
+            foreach (var attr in txnAttributes)
+            {
+                // This is the additional verification script which can be used
+                // to ensure any withdrawal txns are intended by the owner.
+                if (attr.Usage == 0x20) return attr.Data.Take(20);
+            }
+            return Empty;
+        }
+
+        private static bool IsWithdrawingSystemAsset(Transaction transaction)
         {
             // Check that transaction is an Invocation transaction
-            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-            if (currentTxn.Type != 0xd1) return false;
+            if (transaction.Type != 0xd1) return false;
 
             // Check that the transaction is marked as a SystemAsset withdrawal
-            var txnAttributes = currentTxn.GetAttributes();
+            var txnAttributes = transaction.GetAttributes();
             foreach (var attr in txnAttributes)
             {
                 if (attr.Usage == 0xa1 && attr.Data == Yes) return true;
@@ -656,6 +732,11 @@ namespace switcheo
         private static BigInteger AmountToOffer(Offer o, BigInteger amount)
         {
             return (o.OfferAmount * amount) / o.WantAmount;
+        }
+
+        private static byte[] WithdrawalKey(byte[] owner)
+        {
+            return owner.Concat(Withdrawing);
         }
 
         private static byte[] StoreKey(byte[] owner, byte[] assetID)
