@@ -7,14 +7,8 @@ namespace switcheo
 {
     public class BrokerContract : SmartContract
     {
-        [Appcall("3a5ae8c529a96007831e1fdcae1bff3af35548dc")]
-        public static extern object CallPrivRPXContract(string method, params object[] args);
 
-        [Appcall("5b7074e873973a6ed3708862f219a6fbf4d1c411")]
-        public static extern object CallTestRPXContract(string method, params object[] args);
-
-        [Appcall("d7678dd97c000be3f33e9362e673101bac4ca654")]
-        public static extern object CallTestBOAContract(string method, params object[] args);
+        public delegate object NEP5Contract(string method, object[] args);
 
         //[DisplayName("created")]
         //public static event Action<byte[]> Created; // (offerHash)
@@ -52,6 +46,7 @@ namespace switcheo
         private static readonly byte[] Yes = { 0x01 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)
+        
 
         private struct Offer
         {
@@ -63,7 +58,6 @@ namespace switcheo
             public byte[] WantAssetCategory;
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
-            public byte[] Nonce;
             public byte[] PreviousOfferHash; // in same trading pair
             public byte[] NextOfferHash;     // in same trading pair
         }
@@ -400,8 +394,9 @@ namespace switcheo
         {
             // Transfer token
             Runtime.Log("Transferring NEP-5 token..");
-            bool transferSuccessful = (bool)CallExternalContract(assetID, "transfer", 
-                                                                 ExecutionEngine.ExecutingScriptHash, holderAddress, amount);
+
+            var contract = (NEP5Contract)assetID.ToDelegate();
+            bool transferSuccessful = (bool)contract("transfer", new object[] { ExecutionEngine.ExecutingScriptHash, holderAddress, amount });
             if (!transferSuccessful)
             {
                 Runtime.Log("Failed to transfer NEP-5 tokens!");
@@ -472,7 +467,8 @@ namespace switcheo
             else if (assetCategory == NEP5)
             {
                 // Just transfer immediately or fail as this is the last step in verification
-                var transferSuccessful = (bool)CallExternalContract(assetID, "transfer", originator, ExecutionEngine.ExecutingScriptHash, amount);
+                var contract = (NEP5Contract)assetID.ToDelegate();
+                var transferSuccessful = (bool)contract("transfer", new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount });
                 if (!transferSuccessful)
                 {
                     Runtime.Log("Failed to transfer NEP-5 tokens!");
@@ -668,16 +664,6 @@ namespace switcheo
             var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             if (currentBalance - amount > 0) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
             else Storage.Delete(Storage.CurrentContext, key);
-        }
-
-        private static object CallExternalContract(byte[] contract, string method, params object[] args)
-        {
-            if (contract == PrivRPX) return CallPrivRPXContract(method, args);
-            if (contract == TestRPX) return CallTestRPXContract(method, args);
-            if (contract == TestBOA) return CallTestBOAContract(method, args);
-
-            Runtime.Log("Invalid contract scriptHash!");
-            return false;
         }
 
         private static BigInteger AmountToOffer(Offer o, BigInteger amount)
