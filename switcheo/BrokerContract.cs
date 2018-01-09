@@ -109,11 +109,6 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
-            if (Storage.Get(Storage.CurrentContext, "state") == Pending && operation != "initialize") {
-                Runtime.Log("Contract not initialized!");
-                return false;
-            }
-
             if (Runtime.Trigger == TriggerType.Verification)
             {
                 // == Withdrawal of SystemAsset ==
@@ -183,7 +178,7 @@ namespace switcheo
                 // == Execute ==
                 if (operation == "makeOffer")
                 {
-                    if (Storage.Get(Storage.CurrentContext, "state") == Inactive)
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active)
                     {
                         Runtime.Log("Contract is inactive!");
                         return false;
@@ -205,7 +200,7 @@ namespace switcheo
                 }
                 if (operation == "fillOffer")
                 {
-                    if (Storage.Get(Storage.CurrentContext, "state") == Inactive)
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active)
                     {
                         Runtime.Log("Contract is inactive!");
                         return false;
@@ -221,6 +216,13 @@ namespace switcheo
                         // TODO: RefundAllInputs()
                         return false;
                     }
+                }
+
+                // == Cancel / Withdraw ==
+                if (Storage.Get(Storage.CurrentContext, "state") == Pending)
+                {
+                    Runtime.Log("Contract not initialized!");
+                    return false;
                 }
                 if (operation == "cancelOffer")
                 {
@@ -298,6 +300,8 @@ namespace switcheo
             if (!SetFeeAddress(feeAddress)) return false;
             
             Storage.Put(Storage.CurrentContext, "state", Active);
+
+            Runtime.Log("Contract initialized");
             return true;
         }
 
@@ -660,7 +664,7 @@ namespace switcheo
                 previousOffer.NextOfferHash = offer.NextOfferHash;
                 StoreOffer(offer.PreviousOfferHash, previousOffer);
             }
-            
+
             // Delete offer data
             Storage.Delete(Storage.CurrentContext, offerHash);
         }
