@@ -138,7 +138,7 @@ namespace switcheo
                 }
 
                 // Check that all previous withdrawals has been cleared (SC amounts have been updated through invoke)
-                var startOfWithdrawal = Storage.Get(Storage.CurrentContext, WithdrawalKey(withdrawingAddr)).AsBigInteger();
+                var startOfWithdrawal = (uint) Storage.Get(Storage.CurrentContext, WithdrawalKey(withdrawingAddr)).AsBigInteger();
                 var currentHeight = Blockchain.GetHeight();
 
                 // Check that start of withdrawal has been initiated previously
@@ -147,7 +147,7 @@ namespace switcheo
                 // Check that withdrawal was not already done
                 for (var i = startOfWithdrawal; i < currentHeight; i++)
                 {
-                    var block = Blockchain.GetBlock((uint)i);
+                    var block = Blockchain.GetBlock(i);
                     var txns = block.GetTransactions();
                     foreach (var transaction in txns)
                     {
