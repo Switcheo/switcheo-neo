@@ -18,6 +18,9 @@ namespace switcheo
         [DisplayName("filled")]
         public static event Action<byte[], BigInteger> Filled; // (offerHash, amount)
 
+        [DisplayName("failed")]
+        public static event Action<byte[], BigInteger> Failed; // (offerHash, amount)
+
         [DisplayName("cancelled")]
         public static event Action<byte[]> Cancelled; // (offerHash)
 
@@ -33,7 +36,6 @@ namespace switcheo
         private static readonly byte[] TestBOA = { 84, 166, 76, 172, 27, 16, 115, 230, 98, 147, 62, 243, 227, 11, 0, 124, 217, 141, 103, 215 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 3000; // 3000/1000000 = 0.3%
-        private const int maxWithdrawBlocks = 100; // max num of blocks allowed between preparation & withdrawal
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -139,9 +141,8 @@ namespace switcheo
                 var startOfWithdrawal = Storage.Get(Storage.CurrentContext, WithdrawalKey(withdrawingAddr)).AsBigInteger();
                 var currentHeight = Blockchain.GetHeight();
 
-                // Check that start of withdrawal was initiated and within the allowed bounds (DOS protection)
+                // Check that start of withdrawal has been initiated previously
                 if (startOfWithdrawal == 0) return false;
-                if (startOfWithdrawal + maxWithdrawBlocks > currentHeight) return false;
 
                 // Check that withdrawal was not already done
                 for (var i = startOfWithdrawal; i < currentHeight; i++)
