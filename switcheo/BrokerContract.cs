@@ -48,7 +48,6 @@ namespace switcheo
         
         // Flags / Byte Constants
         private static readonly byte[] Empty = { };
-        private static readonly byte[] Yes = { 0x01 };
         private static readonly byte[] Withdrawing = { 0x50 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
@@ -709,7 +708,7 @@ namespace switcheo
             var txnAttributes = transaction.GetAttributes();
             foreach (var attr in txnAttributes)
             {
-                if (attr.Usage == 0xa1 && attr.Data == Yes) return true;
+                if (attr.Usage == 0xa1 && attr.Data == ExecutionEngine.ExecutingScriptHash) return true;
             }
 
             return false;
