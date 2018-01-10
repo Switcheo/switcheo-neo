@@ -133,7 +133,7 @@ namespace switcheo
                 }
 
                 // Check that all previous withdrawals has been cleared (SC amounts have been updated through invoke)
-                var startOfWithdrawal = (uint) Storage.Get(Storage.CurrentContext, WithdrawalKey(withdrawingAddr)).AsBigInteger();
+                var startOfWithdrawal = (uint)Storage.Get(Storage.CurrentContext, WithdrawalKey(withdrawingAddr)).AsBigInteger();
                 var currentHeight = Blockchain.GetHeight();
 
                 // Check that start of withdrawal has been initiated previously
@@ -250,6 +250,8 @@ namespace switcheo
                 if (operation == "completeAssetWithdrawal") // SystemAsset only
                 {
                     var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                    if (!IsWithdrawingSystemAsset(currentTxn)) return false;
+
                     var outputs = currentTxn.GetOutputs();
                     foreach (var o in outputs)
                     {
@@ -259,6 +261,10 @@ namespace switcheo
                             ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
                         }
                     }
+
+                    var withdrawingAddr = GetWithdrawalAddress(currentTxn);
+                    Storage.Delete(Storage.CurrentContext, WithdrawalKey(withdrawingAddr));
+
                     return true;
                 }
 
@@ -462,6 +468,8 @@ namespace switcheo
 
             // Set blockheight from which to check for double withdrawals later on
             Storage.Put(Storage.CurrentContext, withdrawalKey, Blockchain.GetHeight());
+
+            Runtime.Log("Prepared for asset withdrawal");
 
             return true;
         }
