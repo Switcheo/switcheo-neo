@@ -16,10 +16,10 @@ namespace switcheo
         public static event Action<byte[]> Created; // (offerHash)
 
         [DisplayName("filled")]
-        public static event Action<byte[], BigInteger> Filled; // (offerHash, amount)
+        public static event Action<byte[], byte[], BigInteger> Filled; // (address, offerHash, amount)
 
         [DisplayName("failed")]
-        public static event Action<byte[], BigInteger> Failed; // (offerHash, amount)
+        public static event Action<byte[], byte[]> Failed; // (address, offerHash)
 
         [DisplayName("cancelled")]
         public static event Action<byte[]> Cancelled; // (offerHash)
@@ -145,18 +145,20 @@ namespace switcheo
                     var txns = block.GetTransactions();
                     foreach (var transaction in txns)
                     {
-                        // Since this is flagged as a withdrawal, and it is signed by the withdrawing user,
-                        // we know that an withdrawal has been executed without a corresponding
-                        // application invocation.
+                        // Since this is flagged as a withdrawal from this contract,
+                        // and it is signed by the withdrawing user,
+                        // we know that an withdrawal has already been executed without 
+                        // a corresponding application invocation to reduce balance,
+                        // therefore we should reject further withdrawals.
                         if (IsWithdrawingSystemAsset(transaction) &&
                             GetWithdrawalAddress(transaction) == withdrawingAddr) return false;
                     }
                 }
 
                 // Ensure that nothing is burnt
-                ulong totalIn = 0;
-                foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
-                if (totalIn != totalOut) return false;
+                // ulong totalIn = 0;
+                // foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
+                // if (totalIn != totalOut) return false;
 
                 return true;
             }
@@ -175,46 +177,28 @@ namespace switcheo
                 }
 
                 // == Execute ==
+                if (operation == "deposit")
+                {
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
+                    if (IsWithdrawingSystemAsset((Transaction)ExecutionEngine.ScriptContainer)) return false;
+                    if (args.Length != 3) return false;
+                    if (!VerifySentAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
+                    TransferAssetTo((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                    return true;
+                }
                 if (operation == "makeOffer")
                 {
-                    if (Storage.Get(Storage.CurrentContext, "state") != Active)
-                    {
-                        Runtime.Log("Contract is inactive!");
-                        return false;
-                    }
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
                     if (args.Length != 6) return false;
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], Null, Null);
                     var offerHash = Hash(offer, (byte[])args[5]);
-
-                    if (VerifyOffer(offerHash, offer))
-                    {
-                        return MakeOffer(offerHash, offer);
-                    }
-                    else
-                    {
-                        Runtime.Log("Offer is invalid!");
-                        // TODO: RefundAllInputs()
-                        return false;
-                    }
+                    return MakeOffer(offerHash, offer);
                 }
                 if (operation == "fillOffer")
                 {
-                    if (Storage.Get(Storage.CurrentContext, "state") != Active)
-                    {
-                        Runtime.Log("Contract is inactive!");
-                        return false;
-                    }
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
                     if (args.Length != 3) return false;
-                    if (VerifyFill((byte[])args[0], (byte[])args[1], (BigInteger)args[2]))
-                    {
-                        return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
-                    }
-                    else
-                    {
-                        Runtime.Log("Fill is invalid!");
-                        // TODO: RefundAllInputs()
-                        return false;
-                    }
+                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
 
                 // == Cancel / Withdraw ==
@@ -315,7 +299,7 @@ namespace switcheo
             return Storage.Get(Storage.CurrentContext, offerAssetID.Concat(wantAssetID));
         }
 
-        private static bool VerifyOffer(byte[] offerHash, Offer offer)
+        private static bool MakeOffer(byte[] offerHash, Offer offer)
         {
             // Check that transaction is signed by the maker
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
@@ -325,7 +309,7 @@ namespace switcheo
 
             // Check that the amounts > 0
             if (!(offer.OfferAmount > 0 && offer.WantAmount > 0)) return false;
-            
+
             // Check the trade is across different assets
             if (offer.OfferAssetID == offer.WantAssetID) return false;
 
@@ -334,11 +318,8 @@ namespace switcheo
                 (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
 
             // Verify that the offer txn has really has the indicated assets available
-            return VerifySentAmount(offer.MakerAddress, offer.OfferAssetID, offer.OfferAssetCategory, offer.OfferAmount);
-        }
+            if (Storage.Get(Storage.CurrentContext, StoreKey(offer.MakerAddress, offer.OfferAssetID)).AsBigInteger() < offer.OfferAmount) return false;
 
-        private static bool MakeOffer(byte[] offerHash, Offer offer)
-        {
             // Add the offer to storage
             AddOffer(offerHash, offer);
 
@@ -346,34 +327,44 @@ namespace switcheo
             Created(offerHash);
             return true;
         }
-
-        private static bool VerifyFill(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
+        
+        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
         {
             // Check that transaction is signed by the filler
             if (!Runtime.CheckWitness(fillerAddress)) return false;
 
-            // Check that the offer exists 
+            // Check that the offer still exists 
             Offer offer = GetOffer(offerHash);
-            if (offer.MakerAddress == Empty) return false;
+            if (offer.MakerAddress == Empty)
+            {
+                // Notify clients of failure
+                Failed(fillerAddress, offerHash);
+                return true;
+            }
 
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress) return false;
 
-            // Check that amount to offer <= available amount
-            BigInteger amountToOffer = AmountToOffer(offer, amountToFill);
-            if (amountToOffer > offer.AvailableAmount || amountToOffer < 1) return false;
+            // Calculate max amount that can be offered & filled
+            BigInteger amountToOffer = (offer.OfferAmount * amountToFill) / offer.WantAmount;
+            if (amountToOffer > offer.AvailableAmount)
+            {
+                amountToOffer = offer.AvailableAmount;
+                amountToFill = (amountToOffer * offer.WantAmount) / offer.OfferAmount;
+            }
 
-            // Verify that the filling txn really has the required assets available
-            return VerifySentAmount(fillerAddress, offer.WantAssetID, offer.WantAssetCategory, amountToFill);
-        }
+            // Check that the amount available is sufficient
+            if (amountToOffer < 1)
+            {
+                // Notify clients of failure
+                Failed(fillerAddress, offerHash);
+                return true; // TODO: can we return false?
+            }
 
-        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
-        {
-            // Get offer
-            Offer offer = GetOffer(offerHash);
+            // Verify that the there is enough balance to fill offer
+            if (Storage.Get(Storage.CurrentContext, StoreKey(fillerAddress, offer.WantAssetID)).AsBigInteger() < amountToFill) return false;
 
             // Calculate offered amount and fees
-            BigInteger amountToOffer = AmountToOffer(offer, amountToFill);
             BigInteger makerFeeRate = Storage.Get(Storage.CurrentContext, "makerFee").AsBigInteger();
             BigInteger takerFeeRate = Storage.Get(Storage.CurrentContext, "takerFee").AsBigInteger();
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
@@ -398,7 +389,7 @@ namespace switcheo
             StoreOffer(offerHash, offer);
 
             // Notify clients
-            Filled(offerHash, amountToFill);
+            Filled(fillerAddress, offerHash, amountToFill);
             return true;
         }
 
@@ -492,10 +483,10 @@ namespace switcheo
             return true;
         }
 
-        private static bool VerifySentAmount(byte[] originator, byte[] assetID, byte[] assetCategory, BigInteger amount)
+        private static bool VerifySentAmount(byte[] originator, byte[] assetID, BigInteger amount)
         {
             // Verify that the offer really has the indicated assets available
-            if (assetCategory == SystemAsset)
+            if (assetID.Length == 32)
             {
                 // Check the current transaction for the system assets
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
@@ -524,7 +515,7 @@ namespace switcheo
                 // TODO: how to cleanup?
                 return true;
             }
-            else if (assetCategory == NEP5)
+            else if (assetID.Length == 20)
             {
                 // Just transfer immediately or fail as this is the last step in verification
                 var contract = (NEP5Contract)assetID.ToDelegate();
@@ -708,13 +699,13 @@ namespace switcheo
             var txnAttributes = transaction.GetAttributes();
             foreach (var attr in txnAttributes)
             {
-                if (attr.Usage == 0xa1 && attr.Data == ExecutionEngine.ExecutingScriptHash) return true;
+                if (attr.Usage == 0xa1 && attr.Data.Take(20) == ExecutionEngine.ExecutingScriptHash) return true;
             }
 
             return false;
         }
 
-        private static void TransferAssetTo(byte[] address, byte[] assetID, BigInteger amount)
+        private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount)
         {
             if (amount < 1) 
             {
@@ -722,7 +713,7 @@ namespace switcheo
                 return;
             }
 
-            byte[] key = StoreKey(address, assetID);
+            byte[] key = StoreKey(originator, assetID);
             BigInteger currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
             Storage.Put(Storage.CurrentContext, key, currentBalance + amount);
         }
