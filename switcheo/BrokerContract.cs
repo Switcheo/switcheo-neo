@@ -238,7 +238,7 @@ namespace switcheo
                         if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash)
                         {
                             Runtime.Log("Found a withdrawal..");
-                            ReduceBalance(o.ScriptHash, o.AssetId, o.Value);
+                            if(!ReduceBalance(o.ScriptHash, o.AssetId, o.Value)) return false;
                         }
                     }
 
@@ -314,8 +314,8 @@ namespace switcheo
             if ((offer.OfferAssetID.Length != 20 && offer.OfferAssetID.Length != 32) ||
                 (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
 
-            // Verify that the offer txn has really has the indicated assets available
-            if (Storage.Get(Storage.CurrentContext, StoreKey(offer.MakerAddress, offer.OfferAssetID)).AsBigInteger() < offer.OfferAmount) return false;
+            // Reduce available balance for the offered asset and amount
+            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount)) return false;
 
             // Add the offer to storage
             AddOffer(offerHash, offer);
@@ -358,8 +358,8 @@ namespace switcheo
                 return true; // TODO: can we return false?
             }
 
-            // Verify that the there is enough balance to fill offer
-            if (Storage.Get(Storage.CurrentContext, StoreKey(fillerAddress, offer.WantAssetID)).AsBigInteger() < amountToFill) return false;
+            // Reduce available balance for the filled asset and amount
+            if (!ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill)) return false;
 
             // Calculate offered amount and fees
             BigInteger makerFeeRate = Storage.Get(Storage.CurrentContext, "makerFee").AsBigInteger();
@@ -434,7 +434,7 @@ namespace switcheo
             }
             
             // Reduce balance in storage
-            ReduceBalance(holderAddress, assetID, amount);
+            if (!ReduceBalance(holderAddress, assetID, amount)) return false;
 
             // Notify clients
             Withdrawn(holderAddress, assetID, amount);
@@ -715,18 +715,28 @@ namespace switcheo
             Storage.Put(Storage.CurrentContext, key, currentBalance + amount);
         }
 
-        private static void ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
+        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
         {
             if (amount < 1)
             {
                 Runtime.Log("Amount to reduce is less than 1!");
-                return;
+                return false;
             }
 
             var key = StoreKey(address, assetID);
             var currentBalance = Storage.Get(Storage.CurrentContext, key).AsBigInteger();
-            if (currentBalance - amount > 0) Storage.Put(Storage.CurrentContext, key, currentBalance - amount);
+            var newBalance = currentBalance - amount;
+
+            if (newBalance < 0)
+            {
+                Runtime.Log("Not enough balance!");
+                return false;
+            }
+
+            if (newBalance > 0) Storage.Put(Storage.CurrentContext, key, newBalance);
             else Storage.Delete(Storage.CurrentContext, key);
+
+            return true;
         }
 
         private static BigInteger AmountToOffer(Offer o, BigInteger amount)
