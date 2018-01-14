@@ -489,13 +489,8 @@ namespace switcheo
 
         private static bool StakeTokens(byte[] stakerAddress, BigInteger amount)
         {
-            var contract = (NEP5Contract)StakingToken.ToDelegate();
-            bool transferSuccessful = (bool)contract("transfer", new object[] { ExecutionEngine.ExecutingScriptHash, stakerAddress, amount });
-            if (!transferSuccessful)
-            {
-                Runtime.Log("Failed to transfer NEP-5 tokens!");
-                return false;
-            }
+            // Stake tokens from contract balance
+            if (!ReduceBalance(stakerAddress, StakingToken, amount)) return false;
 
             // Get the next available bucket for staking
             BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration + 1;
@@ -870,12 +865,12 @@ namespace switcheo
 
         private static byte[] WithdrawalKey(byte[] owner)
         {
-            return Withdrawing.Concat(owner);
+            return owner.Concat(Withdrawing);
         }
 
         private static byte[] StoreKey(byte[] owner, byte[] assetID)
         {
-            return assetID.Concat(owner);
+            return owner.Concat(assetID);
         }
 
         private static byte[] FeeAddressFor(BigInteger bucketNumber)
