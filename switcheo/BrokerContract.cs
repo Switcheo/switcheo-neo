@@ -159,9 +159,9 @@ namespace switcheo
                 }
 
                 // Ensure that nothing is burnt
-                // ulong totalIn = 0;
-                // foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
-                // if (totalIn != totalOut) return false;
+                ulong totalIn = 0;
+                foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
+                if (totalIn != totalOut) return false;
 
                 return true;
             }
