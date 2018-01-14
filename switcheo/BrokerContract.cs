@@ -31,8 +31,10 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
+        private static readonly byte[] StakingToken = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
+        private const int stakeDuration = 4000; // 4000 blocks => ~27 hrs @ 25s/block
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -46,6 +48,10 @@ namespace switcheo
         // Flags / Byte Constants
         private static readonly byte[] Empty = { };
         private static readonly byte[] Withdrawing = { 0x50 };
+        private static readonly byte[] FeesAccumulated = { 0x60 };
+        private static readonly byte[] StakedAmount = { 0x61 };
+        private static readonly byte[] StakedTime = { 0x62 };
+        private static readonly byte[] StakedTotal = { 0x63 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
 
@@ -196,6 +202,24 @@ namespace switcheo
                     if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
                     if (args.Length != 3) return false;
                     return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                }
+                if (operation == "stakeTokens")
+                {
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
+                    if (args.Length != 2) return false;
+                    return StakeTokens((byte[])args[0], (BigInteger)args[1]);
+                }
+                if (operation == "claimFees")
+                {
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
+                    if (args.Length != 2) return false;
+                    return ClaimFees((byte[])args[0], (byte[][])args[1], (BigInteger)args[2]);
+                }
+                if (operation == "cancelStake")
+                {
+                    if (Storage.Get(Storage.CurrentContext, "state") != Active) return false;
+                    if (args.Length != 1) return false;
+                    return CancelStake((byte[])args[0]);
                 }
 
                 // == Cancel / Withdraw ==
@@ -368,8 +392,10 @@ namespace switcheo
             BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
 
             // Move fees
-            TransferAssetTo(Owner, offer.WantAssetID, makerFee);
-            TransferAssetTo(Owner, offer.OfferAssetID, takerFee);
+            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration;
+            var feeAddress = FeeAddressFor(bucketNumber);
+            TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
+            TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
             // Move asset to the maker balance and notify clients
             TransferAssetTo(offer.MakerAddress, offer.WantAssetID, amountToFill - makerFee);
@@ -457,6 +483,104 @@ namespace switcheo
             Storage.Put(Storage.CurrentContext, withdrawalKey, Blockchain.GetHeight());
 
             Runtime.Log("Prepared for asset withdrawal");
+
+            return true;
+        }
+
+        private static bool StakeTokens(byte[] stakerAddress, BigInteger amount)
+        {
+            var contract = (NEP5Contract)StakingToken.ToDelegate();
+            bool transferSuccessful = (bool)contract("transfer", new object[] { ExecutionEngine.ExecutingScriptHash, stakerAddress, amount });
+            if (!transferSuccessful)
+            {
+                Runtime.Log("Failed to transfer NEP-5 tokens!");
+                return false;
+            }
+
+            // Get the next available bucket for staking
+            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration + 1;
+
+            // Get staking keys
+            var stakedAmountKey = StakedAmount.Concat(stakerAddress);
+            var stakedTimeKey = StakedTime.Concat(stakerAddress);
+            var stakedTotalKey = StakedTotal.Concat(bucketNumber.AsByteArray());
+
+            // Get staking values
+            var stakedAmount = Storage.Get(Storage.CurrentContext, stakedAmountKey).AsBigInteger();
+            var stakedTime = Storage.Get(Storage.CurrentContext, stakedTimeKey).AsBigInteger();
+            var stakedTotal = Storage.Get(Storage.CurrentContext, stakedTotalKey).AsBigInteger();
+
+            // Don't allow re-staking - must claim and cancel first
+            if (stakedAmount > 0 || stakedTime > 0) return false; 
+
+            // Update individual staked amount
+            Storage.Put(Storage.CurrentContext, stakedAmountKey, amount);
+
+            // Update start time of staking
+            Storage.Put(Storage.CurrentContext, stakedTimeKey, bucketNumber);
+
+            // Update total amount staked in the next bucket
+            Storage.Put(Storage.CurrentContext, stakedTotalKey, stakedTotal + amount);
+
+            return true;
+        }
+
+        private static bool ClaimFees(byte[] claimerAddress, byte[][] assetIDs, BigInteger bucketNumber)
+        {
+            // Get staking keys
+            var stakedAmountKey = StakedAmount.Concat(claimerAddress);
+            var stakedTimeKey = StakedTime.Concat(claimerAddress);
+            var stakedTotalKey = StakedTotal.Concat(bucketNumber.AsByteArray());
+
+            // Get staking values
+            var stakedAmount = Storage.Get(Storage.CurrentContext, stakedAmountKey).AsBigInteger();
+            var stakedTime = Storage.Get(Storage.CurrentContext, stakedTimeKey).AsBigInteger();
+            var stakedTotal = Storage.Get(Storage.CurrentContext, stakedTotalKey).AsBigInteger();
+
+            // Check that the claim is valid
+            if (stakedAmount <= 0 || stakedTime < bucketNumber) return false;
+            
+            // Move fees from fee addr to claimer addr
+            foreach (byte[] assetID in assetIDs)
+            {
+                var feeAddress = FeeAddressFor(bucketNumber);
+                var feesKey = StoreKey(feeAddress, assetID);
+                var totalFees = Storage.Get(Storage.CurrentContext, feesKey).AsBigInteger();
+                var claimableAmount = totalFees * stakedAmount / stakedTotal;
+                if (claimableAmount > 0)
+                {
+                    TransferAssetTo(claimerAddress, assetID, claimableAmount);
+                    if (!ReduceBalance(feeAddress, assetID, claimableAmount)) return false;
+                }                
+            }
+
+            // Update staked time
+            Storage.Put(Storage.CurrentContext, stakedTimeKey, bucketNumber + 1);
+
+            return true;
+        }
+
+        private static bool CancelStake(byte[] stakerAddress)
+        {
+            // Get the next available bucket for staking
+            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration + 1;
+
+            // Save staked amount and then remove it
+            var stakedAmountKey = StakedAmount.Concat(stakerAddress);
+            var stakedAmount = Storage.Get(Storage.CurrentContext, stakedAmountKey).AsBigInteger();            
+            Storage.Delete(Storage.CurrentContext, stakedAmountKey);
+
+            // Clean up associated timing
+            var stakedTimeKey = StakedTime.Concat(stakerAddress);
+            Storage.Delete(Storage.CurrentContext, stakedTimeKey);
+
+            // Reduce total staked
+            var stakedTotalKey = StakedTotal.Concat(bucketNumber.AsByteArray());
+            var stakedTotal = Storage.Get(Storage.CurrentContext, stakedTotalKey).AsBigInteger();
+            Storage.Put(Storage.CurrentContext, stakedTotalKey, stakedTotal - stakedAmount);
+
+            // Allow withdrawing of previously staked asset
+            TransferAssetTo(stakerAddress, StakingToken, stakedAmount);
 
             return true;
         }
@@ -746,12 +870,17 @@ namespace switcheo
 
         private static byte[] WithdrawalKey(byte[] owner)
         {
-            return owner.Concat(Withdrawing);
+            return Withdrawing.Concat(owner);
         }
 
         private static byte[] StoreKey(byte[] owner, byte[] assetID)
         {
-            return owner.Concat(assetID);
+            return assetID.Concat(owner);
+        }
+
+        private static byte[] FeeAddressFor(BigInteger bucketNumber)
+        {
+            return FeesAccumulated.Concat(bucketNumber.AsByteArray());
         }
 
         private static byte[] TradingPair(Offer o)
