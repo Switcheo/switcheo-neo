@@ -30,8 +30,8 @@ namespace switcheo
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
-        private static readonly byte[] Owner = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
-        private static readonly byte[] StakingToken = { 3, 155, 217, 208, 126, 39, 22, 240, 204, 75, 166, 25, 176, 174, 191, 219, 155, 90, 115, 95, 22, 184, 157, 239, 124, 99, 195, 216, 104, 192, 32, 97, 232 };
+        private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
+        private static readonly byte[] StakingToken = "ATqJk6ZBC36W6fSn6BetgwvJxq8JuKYCdk".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
         private const int stakeDuration = 4000; // 4000 blocks => ~27 hrs @ 25s/block
@@ -493,7 +493,7 @@ namespace switcheo
             if (!ReduceBalance(stakerAddress, StakingToken, amount)) return false;
 
             // Get the next available bucket for staking
-            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration + 1;
+            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration;
 
             // Get staking keys
             var stakedAmountKey = StakedAmount.Concat(stakerAddress);
@@ -533,7 +533,8 @@ namespace switcheo
             var stakedTotal = Storage.Get(Storage.CurrentContext, stakedTotalKey).AsBigInteger();
 
             // Check that the claim is valid
-            if (stakedAmount <= 0 || stakedTime < bucketNumber) return false;
+            BigInteger currentBucketNumber = Blockchain.GetHeight() / stakeDuration;
+            if (stakedAmount <= 0 || stakedTime < bucketNumber || bucketNumber >= currentBucketNumber) return false;
             
             // Move fees from fee addr to claimer addr
             foreach (byte[] assetID in assetIDs)
@@ -550,7 +551,7 @@ namespace switcheo
             }
 
             // Update staked time
-            Storage.Put(Storage.CurrentContext, stakedTimeKey, bucketNumber + 1);
+            Storage.Put(Storage.CurrentContext, stakedTimeKey, bucketNumber);
 
             return true;
         }
@@ -558,7 +559,7 @@ namespace switcheo
         private static bool CancelStake(byte[] stakerAddress)
         {
             // Get the next available bucket for staking
-            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration + 1;
+            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration;
 
             // Save staked amount and then remove it
             var stakedAmountKey = StakedAmount.Concat(stakerAddress);
