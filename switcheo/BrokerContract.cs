@@ -278,7 +278,7 @@ namespace switcheo
                     Storage.Delete(Context(), WithdrawalKey(withdrawingAddr));
 
                     return true;
-                }
+                }                
 
                 // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
@@ -474,8 +474,9 @@ namespace switcheo
         private static bool WithdrawAssets(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Transfer token
+            var args = new object[] { ExecutionEngine.ExecutingScriptHash, holderAddress, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
-            bool transferSuccessful = (bool)contract("transfer", new object[] { ExecutionEngine.ExecutingScriptHash, holderAddress, amount });
+            bool transferSuccessful = (bool)contract("transfer", args);
             if (!transferSuccessful)
             {
                 Runtime.Log("Failed to transfer NEP-5 tokens!");
@@ -659,8 +660,9 @@ namespace switcheo
             {
                 // Just transfer immediately or fail as this is the last step in verification
                 Runtime.Log("transferring NEP-5..");
+                var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
                 var contract = (NEP5Contract)assetID.ToDelegate();
-                var transferSuccessful = (bool)contract("transfer", new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount });
+                var transferSuccessful = (bool)contract("transfer", args);
                 if (!transferSuccessful)
                 {
                     Runtime.Log("Failed to transfer NEP-5 tokens!");
