@@ -33,7 +33,7 @@ namespace switcheo
         private static readonly byte[] StakingToken = "ATqJk6ZBC36W6fSn6BetgwvJxq8JuKYCdk".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
-        private const int stakeDuration = 4000; // 4000 blocks => ~27 hrs @ 25s/block
+        private const int stakeDuration = 82800; // 82800secs = 23hrs
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -415,7 +415,7 @@ namespace switcheo
             BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
 
             // Move fees
-            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration;
+            BigInteger bucketNumber = Runtime.Time / stakeDuration;
             var feeAddress = FeeAddressFor(bucketNumber);
             TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
             TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
@@ -516,7 +516,7 @@ namespace switcheo
             if (!ReduceBalance(stakerAddress, StakingToken, amount)) return false;
 
             // Get the next available bucket for staking
-            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration;
+            BigInteger bucketNumber = Runtime.Time / stakeDuration;
 
             // Get staking keys
             var stakedAmountKey = StakedAmount.Concat(stakerAddress);
@@ -556,7 +556,7 @@ namespace switcheo
             var stakedTotal = Storage.Get(Context(), stakedTotalKey).AsBigInteger();
 
             // Check that the claim is valid
-            BigInteger currentBucketNumber = Blockchain.GetHeight() / stakeDuration;
+            BigInteger currentBucketNumber = Runtime.Time / stakeDuration;
             if (stakedAmount <= 0 || stakedTime < bucketNumber || bucketNumber >= currentBucketNumber) return false;
             
             // Move fees from fee addr to claimer addr
@@ -582,7 +582,7 @@ namespace switcheo
         private static bool CancelStake(byte[] stakerAddress)
         {
             // Get the next available bucket for staking
-            BigInteger bucketNumber = Blockchain.GetHeight() / stakeDuration;
+            BigInteger bucketNumber = Runtime.Time / stakeDuration;
 
             // Save staked amount and then remove it
             var stakedAmountKey = StakedAmount.Concat(stakerAddress);
