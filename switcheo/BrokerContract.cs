@@ -448,9 +448,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Move funds to withdrawal address
-            var storeKey = StoreKey(offer.MakerAddress, offer.OfferAssetID);
-            BigInteger balance = Storage.Get(Context(), storeKey).AsBigInteger();
-            Storage.Put(Context(), storeKey, balance + offer.AvailableAmount);
+            TransferAssetTo(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount);
 
             // Remove offer
             RemoveOffer(offerHash, offer);
@@ -512,6 +510,9 @@ namespace switcheo
 
         private static bool StakeTokens(byte[] stakerAddress, BigInteger amount)
         {
+            // Check that transaction is signed by the staker
+            if (!Runtime.CheckWitness(stakerAddress)) return false;
+
             // Stake tokens from contract balance
             if (!ReduceBalance(stakerAddress, StakingToken, amount)) return false;
 
