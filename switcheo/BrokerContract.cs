@@ -193,9 +193,8 @@ namespace switcheo
                     if (GetState() != Active) return false;
                     if (IsWithdrawingSystemAsset((Transaction)ExecutionEngine.ScriptContainer)) return false;
                     if (args.Length != 3) return false;
-                    if (!VerifySentAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
                     TransferAssetTo((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
-                    return true;
+                    return VerifySentAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
                 if (operation == "makeOffer")
                 {
@@ -659,20 +658,10 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Just transfer immediately or fail as this is the last step in verification
-                Runtime.Log("transferring NEP-5..");
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
-                var contract = (NEP5Contract)assetID.ToDelegate();
-                var transferSuccessful = (bool)contract("transfer", args);
-                if (!transferSuccessful)
-                {
-                    Runtime.Log("Failed to transfer NEP-5 tokens!");
-                    return false;
-                }
-                else
-                {
-                    Runtime.Notify("deposited", amount);
-                }
-                return true;
+                var Contract = (NEP5Contract)assetID.ToDelegate();
+                var transferSuccessful = (bool)Contract("transfer", args);
+                return transferSuccessful;
             }
 
             // Unknown asset category
