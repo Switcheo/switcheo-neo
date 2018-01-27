@@ -371,7 +371,7 @@ namespace switcheo
             var i = 0;
             while (ptr != Empty && ptr != Null)
             {
-                result[i] = Storage.Get(Context(), ptr);
+                result[i] = ptr.Concat(Storage.Get(Context(), ptr));
                 ptr = GetOffer(ptr).PreviousOfferHash;
                 i++;
             }
