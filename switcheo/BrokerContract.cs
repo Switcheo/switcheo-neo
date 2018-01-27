@@ -186,17 +186,17 @@ namespace switcheo
                 if (operation == "getState") return GetState();
                 if (operation == "getMakerFee") return GetMakerFee();
                 if (operation == "getTakerFee") return GetTakerFee();
+                if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
+                if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
+                if (operation == "getFeeBalance") return GetFeeBalance((byte[])args[0], (BigInteger)args[1]);
+                if (operation == "getTotalStaked") return GetTotalStaked((BigInteger)args[0]);
                 if (operation == "getStakeDetails")
                 {
                     var stakerAddress = (byte[])args[0];
-                    return new object[] {
-                        Storage.Get(Context(), StakedAmountKey(stakerAddress)),
-                        Storage.Get(Context(), StakedTimeKey(stakerAddress))
+                    return new BigInteger[] {
+                        Storage.Get(Context(), StakedAmountKey(stakerAddress)).AsBigInteger(),
+                        Storage.Get(Context(), StakedTimeKey(stakerAddress)).AsBigInteger()
                     };
-                }
-                if (operation == "getTotalStaked")
-                {
-                    return Storage.Get(Context(), StakedTotalKey((BigInteger)args[0]));
                 }
 
                 // == Execute ==
@@ -349,9 +349,34 @@ namespace switcheo
             return Storage.Get(Context(), "takerFee").AsBigInteger();
         }
 
-        private static byte[] GetOffers(byte[] offerAssetID, byte[] wantAssetID)
+        private static BigInteger GetBalance(byte[] originator, byte[] assetID)
         {
-            return Storage.Get(Context(), offerAssetID.Concat(wantAssetID));
+            return Storage.Get(Context(), StoreKey(originator, assetID)).AsBigInteger();
+        }
+
+        private static BigInteger GetFeeBalance(byte[] assetID, BigInteger bucketNumber)
+        {
+            return Storage.Get(Context(), StoreKey(FeeAddressFor(bucketNumber), assetID)).AsBigInteger();
+        }
+
+        private static BigInteger GetTotalStaked(BigInteger bucketNumber)
+        {
+            return Storage.Get(Context(), StakedTotalKey(bucketNumber)).AsBigInteger();
+        }
+
+        private static byte[][] GetOffers(byte[] start, BigInteger count) // offerAssetID.Concat(wantAssetID)
+        {
+            var ptr = start;
+            var result = new byte[50][]; // TODO: dynamic count doesn't work?
+            var i = 0;
+            while (ptr != Empty && ptr != Null)
+            {
+                result[i] = Storage.Get(Context(), ptr);
+                ptr = GetOffer(ptr).PreviousOfferHash;
+                i++;
+            }
+
+            return result;
         }
 
         private static bool MakeOffer(byte[] offerHash, Offer offer)
@@ -473,8 +498,7 @@ namespace switcheo
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Check that there are asset value > 0 in balance
-            var key = StoreKey(holderAddress, assetID);
-            var balance = Storage.Get(Context(), key).AsBigInteger();
+            var balance = GetBalance(holderAddress, assetID);
             if (balance < amount) return false;
 
             return true;
@@ -886,8 +910,8 @@ namespace switcheo
             return true;
         }
 
-        private static byte[] WithdrawalKey(byte[] owner) => owner.Concat(Withdrawing);
-        private static byte[] StoreKey(byte[] owner, byte[] assetID) => owner.Concat(assetID);
+        private static byte[] WithdrawalKey(byte[] originator) => originator.Concat(Withdrawing);
+        private static byte[] StoreKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
         private static byte[] StakedAmountKey(byte[] staker) => StakedAmount.Concat(staker);
         private static byte[] StakedTimeKey(byte[] staker) => StakedTime.Concat(staker);
         private static byte[] StakedTotalKey(BigInteger bucketNumber) => StakedTotal.Concat(bucketNumber.AsByteArray());
