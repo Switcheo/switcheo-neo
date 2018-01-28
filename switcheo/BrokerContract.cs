@@ -54,6 +54,7 @@ namespace switcheo
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
         private static StorageContext Context() => Storage.CurrentContext;
+        private static BigInteger CurrentBucket() => Runtime.Time / stakeDuration;
 
         private struct Offer
         {
@@ -328,7 +329,8 @@ namespace switcheo
             if (!SetFees(takerFee, makerFee)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
             
-            Storage.Put(Context(), "state", Active);
+            Storage.Put(Context(), "state", Active);            
+            Storage.Put(Context(), StakedTotalKey(CurrentBucket()), 0);
 
             Runtime.Log("Contract initialized");
             return true;
@@ -361,7 +363,15 @@ namespace switcheo
 
         private static BigInteger GetTotalStaked(BigInteger bucketNumber)
         {
-            return Storage.Get(Context(), StakedTotalKey(bucketNumber)).AsBigInteger();
+            var key = StakedTotalKey(bucketNumber);
+            var total = Storage.Get(Context(), key);
+            if (total.Length == 0)
+            {
+                var previousTotal = GetTotalStaked(bucketNumber - 1);
+                Storage.Put(Context(), key, previousTotal);
+                return previousTotal;
+            }
+            return total.AsBigInteger();
         }
 
         private static byte[][] GetOffers(byte[] start, BigInteger count) // offerAssetID.Concat(wantAssetID)
@@ -451,8 +461,7 @@ namespace switcheo
             BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
 
             // Move fees
-            BigInteger bucketNumber = Runtime.Time / stakeDuration;
-            var feeAddress = FeeAddressFor(bucketNumber);
+            var feeAddress = FeeAddressFor(CurrentBucket());
             TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
             TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
@@ -553,17 +562,16 @@ namespace switcheo
             if (!ReduceBalance(stakerAddress, StakingToken, amount)) return false;
 
             // Get the next available bucket for staking
-            BigInteger bucketNumber = Runtime.Time / stakeDuration;
+            BigInteger bucketNumber = CurrentBucket();
 
             // Get staking keys
             var stakedAmountKey = StakedAmountKey(stakerAddress);
             var stakedTimeKey = StakedTimeKey(stakerAddress);
-            var stakedTotalKey = StakedTotalKey(bucketNumber);
 
             // Get staking values
             var stakedAmount = Storage.Get(Context(), stakedAmountKey).AsBigInteger();
             var stakedTime = Storage.Get(Context(), stakedTimeKey).AsBigInteger();
-            var stakedTotal = Storage.Get(Context(), stakedTotalKey).AsBigInteger();
+            var stakedTotal = GetTotalStaked(bucketNumber);
 
             // Don't allow re-staking - must claim and cancel first
             if (stakedAmount > 0 || stakedTime > 0) return false; 
@@ -575,7 +583,7 @@ namespace switcheo
             Storage.Put(Context(), stakedTimeKey, bucketNumber);
 
             // Update total amount staked in the next bucket
-            Storage.Put(Context(), stakedTotalKey, stakedTotal + amount);
+            Storage.Put(Context(), StakedTotalKey(bucketNumber), stakedTotal + amount);
 
             return true;
         }
@@ -585,10 +593,10 @@ namespace switcheo
             // Get staking details
             var stakedAmount = Storage.Get(Context(), StakedAmountKey(claimerAddress)).AsBigInteger();
             var stakedTime = Storage.Get(Context(), StakedTimeKey(claimerAddress)).AsBigInteger();
-            var stakedTotal = Storage.Get(Context(), StakedTotalKey(bucketNumber)).AsBigInteger();
+            var stakedTotal = GetTotalStaked(bucketNumber);
 
             // Check that the claim is valid
-            BigInteger currentBucketNumber = Runtime.Time / stakeDuration;
+            BigInteger currentBucketNumber = CurrentBucket();
             if (stakedAmount <= 0 || stakedTime < bucketNumber || bucketNumber >= currentBucketNumber) return false;
             
             // Move fees from fee addr to claimer addr
@@ -614,7 +622,7 @@ namespace switcheo
         private static bool CancelStake(byte[] stakerAddress)
         {
             // Get the next available bucket for staking
-            BigInteger bucketNumber = Runtime.Time / stakeDuration;
+            BigInteger bucketNumber = CurrentBucket();
 
             // Save staked amount and then remove it
             var stakedAmountKey = StakedAmountKey(stakerAddress);
@@ -844,7 +852,7 @@ namespace switcheo
             }
 
             return amount;
-        }
+        }        
 
         private static byte[] GetWithdrawalAddress(Transaction transaction)
         {
