@@ -52,6 +52,8 @@ namespace switcheo
         private static readonly byte[] StakedAmount = { 0x61 };
         private static readonly byte[] StakedTime = { 0x62 };
         private static readonly byte[] StakedTotal = { 0x63 };
+        private static readonly byte[] Native = { 0x70 };
+        private static readonly byte[] Foreign = { 0x71 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
         private static StorageContext Context() => Storage.CurrentContext;
@@ -377,8 +379,9 @@ namespace switcheo
 
         private static double GetExchangeRate(byte[] assetID) // against native token
         {
-            var nativeVolume = Storage.Get(Context(), VolumeKey(NativeToken)).AsBigInteger();
-            var otherVolume = Storage.Get(Context(), VolumeKey(assetID)).AsBigInteger();
+            var bucketNumber = CurrentBucket() - 1;
+            var nativeVolume = Storage.Get(Context(), NativeVolumeKey(assetID, bucketNumber)).AsBigInteger();
+            var otherVolume = Storage.Get(Context(), ForeignVolumeKey(assetID, bucketNumber)).AsBigInteger();
             if (otherVolume == 0) return 0;
 
             return (double)otherVolume / (double)nativeVolume;
@@ -482,8 +485,12 @@ namespace switcheo
             // Move asset to the taker balance and notify clients
             if (useNativeTokens)
             {
-                var nativeVolume = Storage.Get(Context(), VolumeKey(NativeToken)).AsBigInteger();
-                var otherVolume = Storage.Get(Context(), VolumeKey(offer.OfferAssetID)).AsBigInteger();
+                // Use previous trading period's exchange rate
+                var bucketNumber = CurrentBucket() - 1;
+
+                // Derive rate from volumes traded
+                var nativeVolume = Storage.Get(Context(), NativeVolumeKey(offer.OfferAssetID, bucketNumber)).AsBigInteger();
+                var otherVolume = Storage.Get(Context(), ForeignVolumeKey(offer.OfferAssetID, bucketNumber)).AsBigInteger();
                 BigInteger nativeFee = 0;
                 if (otherVolume > 0)
                 {
@@ -503,25 +510,31 @@ namespace switcheo
             // Update native token exchange rate
             if (offer.OfferAssetID == NativeToken)
             {
+                // Adding volume to the current trading period
+                var bucketNumber = CurrentBucket();
+
                 // Increase native token total by amountToOffer
-                var nativeKey = VolumeKey(NativeToken);
+                var nativeKey = NativeVolumeKey(offer.WantAssetID, bucketNumber);
                 var nativeVolume = Storage.Get(Context(), nativeKey).AsBigInteger();
                 Storage.Put(Context(), nativeKey, nativeVolume + amountToOffer);
 
                 // Increase other token total by amountToFill                
-                var otherKey = VolumeKey(offer.WantAssetID);
+                var otherKey = ForeignVolumeKey(offer.WantAssetID, bucketNumber);
                 var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
                 Storage.Put(Context(), nativeKey, otherVolume + amountToFill);
             }
             if (offer.WantAssetID == NativeToken)
             {
+                // Adding volume to the current trading period
+                var bucketNumber = CurrentBucket();
+
                 // Increase native token total by amountToOffer
-                var nativeKey = VolumeKey(NativeToken);
+                var nativeKey = NativeVolumeKey(offer.OfferAssetID, bucketNumber);
                 var nativeVolume = Storage.Get(Context(), nativeKey).AsBigInteger();
                 Storage.Put(Context(), nativeKey, nativeVolume + amountToFill);
 
                 // Increase other token total by amountToFill                
-                var otherKey = VolumeKey(offer.OfferAssetID);
+                var otherKey = ForeignVolumeKey(offer.OfferAssetID, bucketNumber);
                 var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
                 Storage.Put(Context(), nativeKey, otherVolume + amountToOffer);
             }
@@ -973,7 +986,8 @@ namespace switcheo
 
         private static byte[] StoreKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
         private static byte[] WithdrawalKey(byte[] originator) => originator.Concat(Withdrawing);
-        private static byte[] VolumeKey(byte[] assetID) => assetID.Concat((CurrentBucket() - 1).AsByteArray());
+        private static byte[] ForeignVolumeKey(byte[] assetID, BigInteger bucketNumber) => assetID.Concat(Foreign).Concat(bucketNumber.AsByteArray());
+        private static byte[] NativeVolumeKey(byte[] assetID, BigInteger bucketNumber) => assetID.Concat(Native).Concat(bucketNumber.AsByteArray());
         private static byte[] StakedAmountKey(byte[] staker) => StakedAmount.Concat(staker);
         private static byte[] StakedTimeKey(byte[] staker) => StakedTime.Concat(staker);
         private static byte[] StakedTotalKey(BigInteger bucketNumber) => StakedTotal.Concat(bucketNumber.AsByteArray());
