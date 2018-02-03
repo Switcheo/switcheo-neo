@@ -12,10 +12,10 @@ namespace switcheo
         public delegate object NEP5Contract(string method, object[] args);
 
         [DisplayName("created")]
-        public static event Action<byte[]> Created; // (offerHash)
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger> Created; // (offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
         [DisplayName("filled")]
-        public static event Action<byte[], byte[], BigInteger> Filled; // (address, offerHash, amount)
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger> Filled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
         [DisplayName("failed")]
         public static event Action<byte[], byte[]> Failed; // (address, offerHash)
@@ -30,7 +30,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
-        private static readonly byte[] StakingToken = "ATqJk6ZBC36W6fSn6BetgwvJxq8JuKYCdk".ToScriptHash();
+        private static readonly byte[] StakingToken = "AYdPyCbHS3MZoJDeZSntgdnDbpa5ScXade".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
         private const int stakeDuration = 82800; // 82800secs = 23hrs
@@ -414,7 +414,7 @@ namespace switcheo
             AddOffer(offerHash, offer);
 
             // Notify clients
-            Created(offerHash);
+            Created(offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
             return true;
         }
         
@@ -480,7 +480,7 @@ namespace switcheo
             StoreOffer(offerHash, offer);
 
             // Notify clients
-            Filled(fillerAddress, offerHash, amountToFill);
+            Filled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
             return true;
         }
 
