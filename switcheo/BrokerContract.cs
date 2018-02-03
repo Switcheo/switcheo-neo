@@ -30,10 +30,11 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
-        private static readonly byte[] StakingToken = "AYdPyCbHS3MZoJDeZSntgdnDbpa5ScXade".ToScriptHash();
+        private static readonly byte[] NativeToken = "AYdPyCbHS3MZoJDeZSntgdnDbpa5ScXade".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
         private const int stakeDuration = 82800; // 82800secs = 23hrs
+        private const int nativeTokenDiscount = 2; // 1/2 => 50%
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -43,7 +44,7 @@ namespace switcheo
         // Asset Categories
         private static readonly byte[] SystemAsset = { 0x99 };
         private static readonly byte[] NEP5 = { 0x98 };
-        
+
         // Flags / Byte Constants
         private static readonly byte[] Empty = { };
         private static readonly byte[] Withdrawing = { 0x50 };
@@ -73,8 +74,8 @@ namespace switcheo
         private static Offer NewOffer(
             byte[] makerAddress,
             byte[] offerAssetID, byte[] offerAmount,
-            byte[] wantAssetID,  byte[] wantAmount,
-            byte[] availableAmount, 
+            byte[] wantAssetID, byte[] wantAmount,
+            byte[] availableAmount,
             byte[] previousOfferHash, byte[] nextOfferHash
         )
         {
@@ -220,8 +221,8 @@ namespace switcheo
                 if (operation == "fillOffer")
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 3) return false;
-                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                    if (args.Length != 4) return false;
+                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (bool)args[3]);
                 }
                 if (operation == "stakeTokens")
                 {
@@ -282,7 +283,7 @@ namespace switcheo
                         if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash)
                         {
                             Runtime.Log("Found a withdrawal..");
-                            if(!ReduceBalance(o.ScriptHash, o.AssetId, o.Value)) return false;
+                            if (!ReduceBalance(o.ScriptHash, o.AssetId, o.Value)) return false;
                         }
                     }
 
@@ -290,7 +291,7 @@ namespace switcheo
                     Storage.Delete(Context(), WithdrawalKey(withdrawingAddr));
 
                     return true;
-                }                
+                }
 
                 // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
@@ -314,7 +315,7 @@ namespace switcheo
                     return SetFees((BigInteger)args[0], (BigInteger)args[1]);
                 }
                 if (operation == "setFeeAddress")
-                {   
+                {
                     if (args.Length != 1) return false;
                     return SetFeeAddress((byte[])args[0]);
                 }
@@ -328,8 +329,8 @@ namespace switcheo
             if (GetState() != Pending) return false;
             if (!SetFees(takerFee, makerFee)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
-            
-            Storage.Put(Context(), "state", Active);            
+
+            Storage.Put(Context(), "state", Active);
             Storage.Put(Context(), StakedTotalKey(CurrentBucket()), 0);
 
             Runtime.Log("Contract initialized");
@@ -372,6 +373,15 @@ namespace switcheo
                 return previousTotal;
             }
             return total.AsBigInteger();
+        }
+
+        private static double GetExchangeRate(byte[] assetID) // against native token
+        {
+            var nativeVolume = Storage.Get(Context(), VolumeKey(NativeToken)).AsBigInteger();
+            var otherVolume = Storage.Get(Context(), VolumeKey(assetID)).AsBigInteger();
+            if (otherVolume == 0) return 0;
+
+            return (double)otherVolume / (double)nativeVolume;
         }
 
         private static byte[][] GetOffers(byte[] start, BigInteger count) // offerAssetID.Concat(wantAssetID)
@@ -417,8 +427,8 @@ namespace switcheo
             Created(offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
             return true;
         }
-        
-        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill)
+
+        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill, bool useNativeTokens)
         {
             // Check that transaction is signed by the filler
             if (!Runtime.CheckWitness(fillerAddress)) return false;
@@ -444,7 +454,7 @@ namespace switcheo
             }
 
             // Check that the amount available is sufficient
-            if (amountToOffer < 1)
+            if (amountToOffer < 1 || amountToFill < 1)
             {
                 // Notify clients of failure
                 Failed(fillerAddress, offerHash);
@@ -470,8 +480,51 @@ namespace switcheo
             Transferred(offer.MakerAddress, offer.WantAssetID, amountToFill - makerFee);
 
             // Move asset to the taker balance and notify clients
-            TransferAssetTo(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
-            Transferred(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
+            if (useNativeTokens)
+            {
+                var nativeVolume = Storage.Get(Context(), VolumeKey(NativeToken)).AsBigInteger();
+                var otherVolume = Storage.Get(Context(), VolumeKey(offer.OfferAssetID)).AsBigInteger();
+                BigInteger nativeFee = 0;
+                if (otherVolume > 0)
+                {
+                    // use native fee, if we can get an exchange rate
+                    nativeFee = (takerFee * nativeVolume) / (otherVolume * nativeTokenDiscount);
+                }
+                ReduceBalance(fillerAddress, NativeToken, nativeFee);
+                TransferAssetTo(fillerAddress, offer.OfferAssetID, amountToOffer);
+                Transferred(fillerAddress, offer.OfferAssetID, amountToOffer);
+            }
+            else
+            {
+                TransferAssetTo(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
+                Transferred(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
+            }
+
+            // Update native token exchange rate
+            if (offer.OfferAssetID == NativeToken)
+            {
+                // Increase native token total by amountToOffer
+                var nativeKey = VolumeKey(NativeToken);
+                var nativeVolume = Storage.Get(Context(), nativeKey).AsBigInteger();
+                Storage.Put(Context(), nativeKey, nativeVolume + amountToOffer);
+
+                // Increase other token total by amountToFill                
+                var otherKey = VolumeKey(offer.WantAssetID);
+                var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
+                Storage.Put(Context(), nativeKey, otherVolume + amountToFill);
+            }
+            if (offer.WantAssetID == NativeToken)
+            {
+                // Increase native token total by amountToOffer
+                var nativeKey = VolumeKey(NativeToken);
+                var nativeVolume = Storage.Get(Context(), nativeKey).AsBigInteger();
+                Storage.Put(Context(), nativeKey, nativeVolume + amountToFill);
+
+                // Increase other token total by amountToFill                
+                var otherKey = VolumeKey(offer.OfferAssetID);
+                var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
+                Storage.Put(Context(), nativeKey, otherVolume + amountToOffer);
+            }
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToOffer;
@@ -503,7 +556,7 @@ namespace switcheo
             Cancelled(offerHash);
             return true;
         }
-        
+
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             // Check that there are asset value > 0 in balance
@@ -524,7 +577,7 @@ namespace switcheo
                 Runtime.Log("Failed to transfer NEP-5 tokens!");
                 return false;
             }
-            
+
             // Reduce balance in storage
             if (!ReduceBalance(holderAddress, assetID, amount)) return false;
 
@@ -541,7 +594,7 @@ namespace switcheo
 
             // Get the key which marks start of withdrawal process
             var withdrawalKey = WithdrawalKey(holderAddress);
-            
+
             // Check if already withdrawing
             if (Storage.Get(Context(), withdrawalKey) != Empty) return false;
 
@@ -559,7 +612,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(stakerAddress)) return false;
 
             // Stake tokens from contract balance
-            if (!ReduceBalance(stakerAddress, StakingToken, amount)) return false;
+            if (!ReduceBalance(stakerAddress, NativeToken, amount)) return false;
 
             // Get the next available bucket for staking
             BigInteger bucketNumber = CurrentBucket();
@@ -574,7 +627,7 @@ namespace switcheo
             var stakedTotal = GetTotalStaked(bucketNumber);
 
             // Don't allow re-staking - must claim and cancel first
-            if (stakedAmount > 0 || stakedTime > 0) return false; 
+            if (stakedAmount > 0 || stakedTime > 0) return false;
 
             // Update individual staked amount
             Storage.Put(Context(), stakedAmountKey, amount);
@@ -598,7 +651,7 @@ namespace switcheo
             // Check that the claim is valid
             BigInteger currentBucketNumber = CurrentBucket();
             if (stakedAmount <= 0 || stakedTime < bucketNumber || bucketNumber >= currentBucketNumber) return false;
-            
+
             // Move fees from fee addr to claimer addr
             foreach (byte[] assetID in assetIDs)
             {
@@ -610,7 +663,7 @@ namespace switcheo
                 {
                     TransferAssetTo(claimerAddress, assetID, claimableAmount);
                     if (!ReduceBalance(feeAddress, assetID, claimableAmount)) return false;
-                }                
+                }
             }
 
             // Update staked time
@@ -626,7 +679,7 @@ namespace switcheo
 
             // Save staked amount and then remove it
             var stakedAmountKey = StakedAmountKey(stakerAddress);
-            var stakedAmount = Storage.Get(Context(), stakedAmountKey).AsBigInteger();            
+            var stakedAmount = Storage.Get(Context(), stakedAmountKey).AsBigInteger();
             Storage.Delete(Context(), stakedAmountKey);
 
             // Clean up associated timing
@@ -639,7 +692,7 @@ namespace switcheo
             Storage.Put(Context(), stakedTotalKey, stakedTotal - stakedAmount);
 
             // Allow withdrawing of previously staked asset
-            TransferAssetTo(stakerAddress, StakingToken, stakedAmount);
+            TransferAssetTo(stakerAddress, NativeToken, stakedAmount);
 
             return true;
         }
@@ -686,7 +739,7 @@ namespace switcheo
                 // Check that the sent amount is still sufficient
                 if (sentAmount - consumedAmount < amount) {
                     Runtime.Log("Not enough of asset sent");
-                    return false;   
+                    return false;
                 }
 
                 // Update the consumed amount for this txn
@@ -778,7 +831,7 @@ namespace switcheo
                                      .Concat(offer.AvailableAmount.AsByteArray().Concat(Zeroes).Take(8))
                                      .Concat(offer.PreviousOfferHash)
                                      .Concat(offer.NextOfferHash);
-                
+
                 Storage.Put(Context(), offerHash, offerData);
             }
         }
@@ -794,7 +847,7 @@ namespace switcheo
                 offer.PreviousOfferHash = previousOfferHash;
                 var previousOffer = GetOffer(previousOfferHash);
                 previousOffer.NextOfferHash = offerHash;
-                StoreOffer(previousOfferHash, previousOffer); 
+                StoreOffer(previousOfferHash, previousOffer);
             }
 
             // Set the HEAD of the linked list for this trading pair as this offer
@@ -811,8 +864,8 @@ namespace switcheo
             byte[] head = Storage.Get(Context(), tradingPair);
 
             // Check if the offer is at the HEAD of the linked list
-            if (head == offerHash) 
-            {             
+            if (head == offerHash)
+            {
                 // There are more offers in this list so set the new HEAD of the linked list to the previous offer
                 if (offer.PreviousOfferHash != Null)
                 {
@@ -852,7 +905,7 @@ namespace switcheo
             }
 
             return amount;
-        }        
+        }
 
         private static byte[] GetWithdrawalAddress(Transaction transaction)
         {
@@ -883,7 +936,7 @@ namespace switcheo
 
         private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount)
         {
-            if (amount < 1) 
+            if (amount < 1)
             {
                 Runtime.Log("Amount to transfer is less than 1!");
                 return;
@@ -918,8 +971,9 @@ namespace switcheo
             return true;
         }
 
-        private static byte[] WithdrawalKey(byte[] originator) => originator.Concat(Withdrawing);
         private static byte[] StoreKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
+        private static byte[] WithdrawalKey(byte[] originator) => originator.Concat(Withdrawing);
+        private static byte[] VolumeKey(byte[] assetID) => assetID.Concat((CurrentBucket() - 1).AsByteArray());
         private static byte[] StakedAmountKey(byte[] staker) => StakedAmount.Concat(staker);
         private static byte[] StakedTimeKey(byte[] staker) => StakedTime.Concat(staker);
         private static byte[] StakedTotalKey(BigInteger bucketNumber) => StakedTotal.Concat(bucketNumber.AsByteArray());
