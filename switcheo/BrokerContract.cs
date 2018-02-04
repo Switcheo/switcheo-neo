@@ -377,14 +377,13 @@ namespace switcheo
             return total.AsBigInteger();
         }
 
-        private static double GetExchangeRate(byte[] assetID) // against native token
+        private static BigInteger[] GetExchangeRate(byte[] assetID) // against native token
         {
             var bucketNumber = CurrentBucket() - 1;
             var nativeVolume = Storage.Get(Context(), NativeVolumeKey(assetID, bucketNumber)).AsBigInteger();
             var otherVolume = Storage.Get(Context(), ForeignVolumeKey(assetID, bucketNumber)).AsBigInteger();
-            if (otherVolume == 0) return 0;
 
-            return (double)otherVolume / (double)nativeVolume;
+            return new BigInteger[] { otherVolume, nativeVolume };
         }
 
         private static byte[][] GetOffers(byte[] start, BigInteger count) // offerAssetID.Concat(wantAssetID)
