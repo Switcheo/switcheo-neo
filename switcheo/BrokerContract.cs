@@ -190,6 +190,7 @@ namespace switcheo
                 if (operation == "getState") return GetState();
                 if (operation == "getMakerFee") return GetMakerFee();
                 if (operation == "getTakerFee") return GetTakerFee();
+                if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
                 if (operation == "getFeeBalance") return GetFeeBalance((byte[])args[0], (BigInteger)args[1]);
