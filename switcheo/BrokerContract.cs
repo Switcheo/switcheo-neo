@@ -12,7 +12,7 @@ namespace switcheo
         public delegate object NEP5Contract(string method, object[] args);
 
         [DisplayName("created")]
-        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger> Created; // (offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
+        public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> Created; // (address, offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
         [DisplayName("filled")]
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger> Filled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount)
@@ -21,7 +21,7 @@ namespace switcheo
         public static event Action<byte[], byte[]> Failed; // (address, offerHash)
 
         [DisplayName("cancelled")]
-        public static event Action<byte[]> Cancelled; // (offerHash)
+        public static event Action<byte[], byte[]> Cancelled; // (address, offerHash)
 
         [DisplayName("transferred")]
         public static event Action<byte[], byte[], BigInteger> Transferred; // (address, assetID, amount)
@@ -427,7 +427,7 @@ namespace switcheo
             AddOffer(offerHash, offer);
 
             // Notify clients
-            Created(offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
+            Created(offer.MakerAddress, offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
             return true;
         }
 
@@ -566,7 +566,7 @@ namespace switcheo
             RemoveOffer(offerHash, offer);
 
             // Notify runtime
-            Cancelled(offerHash);
+            Cancelled(offer.MakerAddress, offerHash);
             return true;
         }
 
