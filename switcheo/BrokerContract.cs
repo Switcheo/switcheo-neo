@@ -210,8 +210,9 @@ namespace switcheo
                     if (GetState() != Active) return false;
                     if (IsWithdrawingSystemAsset((Transaction)ExecutionEngine.ScriptContainer)) return false;
                     if (args.Length != 3) return false;
+                    if (!VerifySentAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
                     TransferAssetTo((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
-                    return VerifySentAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                    return true;
                 }
                 if (operation == "makeOffer")
                 {
