@@ -69,8 +69,7 @@ namespace switcheo
             public byte[] WantAssetCategory;
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
-            public byte[] PreviousOfferHash; // in same trading pair
-            public byte[] NextOfferHash;     // in same trading pair
+            public byte[] Nonce;
         }
 
         private static Offer NewOffer(
@@ -78,7 +77,7 @@ namespace switcheo
             byte[] offerAssetID, byte[] offerAmount,
             byte[] wantAssetID, byte[] wantAmount,
             byte[] availableAmount,
-            byte[] previousOfferHash, byte[] nextOfferHash
+            byte[] nonce
         )
         {
             var offerAssetCategory = NEP5;
@@ -96,8 +95,7 @@ namespace switcheo
                 WantAssetCategory = wantAssetCategory,
                 WantAmount = wantAmount.AsBigInteger(),
                 AvailableAmount = availableAmount.AsBigInteger(),
-                PreviousOfferHash = previousOfferHash,
-                NextOfferHash = nextOfferHash
+                Nonce = nonce,
             };
         }
 
@@ -191,7 +189,7 @@ namespace switcheo
                 if (operation == "getMakerFee") return GetMakerFee();
                 if (operation == "getTakerFee") return GetTakerFee();
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
-                if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
+                if (operation == "getOffers") return GetOffers((byte[])args[0], (int)args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
                 if (operation == "getFeeBalance") return GetFeeBalance((byte[])args[0], (BigInteger)args[1]);
                 if (operation == "getTotalStaked") return GetTotalStaked((BigInteger)args[0]);
@@ -218,15 +216,14 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
-                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], Null, Null);
-                    var offerHash = Hash(offer, (byte[])args[5]);
-                    return MakeOffer(offerHash, offer);
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], (byte[])args[5]);
+                    return MakeOffer(offer);
                 }
                 if (operation == "fillOffer")
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 4) return false;
-                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (bool)args[3]);
+                    if (args.Length != 5) return false;
+                    return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (bool)args[4]);
                 }
                 if (operation == "stakeTokens")
                 {
@@ -255,8 +252,8 @@ namespace switcheo
                 }
                 if (operation == "cancelOffer")
                 {
-                    if (args.Length != 1) return false;
-                    return CancelOffer((byte[])args[0]);
+                    if (args.Length != 2) return false;
+                    return CancelOffer((byte[])args[0], (byte[])args[1]);
                 }
                 if (operation == "withdrawAssets") // NEP-5 only
                 {
@@ -388,28 +385,28 @@ namespace switcheo
             return new BigInteger[] { otherVolume, nativeVolume };
         }
 
-        private static byte[][] GetOffers(byte[] start, BigInteger count) // offerAssetID.Concat(wantAssetID)
+        private static byte[][] GetOffers(byte[] tradingPair, int count) // offerAssetID.Concat(wantAssetID)
         {
-            var ptr = start;
-            var result = new byte[50][]; // TODO: dynamic count doesn't work?
+            var result = new byte[count][]; // TODO: dynamic initialization doesn't work?
             var i = 0;
-            while (ptr != Empty && ptr != Null)
+            var it = Storage.Find(Context(), tradingPair);
+            do
             {
-                result[i] = ptr.Concat(Storage.Get(Context(), ptr));
-                ptr = GetOffer(ptr).PreviousOfferHash;
-                i++;
-            }
+                result[i] = it.Value;
+            } while (it.Next() != null && i < count && i < 50);
 
             return result;
         }
 
-        private static bool MakeOffer(byte[] offerHash, Offer offer)
+        private static bool MakeOffer(Offer offer)
         {
             // Check that transaction is signed by the maker
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Check that nonce is not repeated
-            if (Storage.Get(Context(), offerHash) != Empty) return false;
+            var tradingPair = TradingPair(offer);
+            var offerHash = Hash(offer);
+            if (Storage.Get(Context(), tradingPair.Concat(offerHash)) != Empty) return false;
 
             // Check that the amounts > 0
             if (!(offer.OfferAmount > 0 && offer.WantAmount > 0)) return false;
@@ -425,20 +422,20 @@ namespace switcheo
             if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount)) return false;
 
             // Add the offer to storage
-            AddOffer(offerHash, offer);
+            StoreOffer(tradingPair, offerHash, offer);
 
             // Notify clients
             Created(offer.MakerAddress, offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
             return true;
         }
 
-        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToFill, bool useNativeTokens)
+        private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToFill, bool useNativeTokens)
         {
             // Check that transaction is signed by the filler
             if (!Runtime.CheckWitness(fillerAddress)) return false;
 
             // Check that the offer still exists 
-            Offer offer = GetOffer(offerHash);
+            Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty)
             {
                 // Notify clients of failure
@@ -544,17 +541,17 @@ namespace switcheo
             offer.AvailableAmount = offer.AvailableAmount - amountToOffer;
 
             // Store updated offer
-            StoreOffer(offerHash, offer);
+            StoreOffer(tradingPair, offerHash, offer);
 
             // Notify clients
             Filled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
             return true;
         }
 
-        private static bool CancelOffer(byte[] offerHash)
+        private static bool CancelOffer(byte[] tradingPair, byte[] offerHash)
         {
             // Check that the offer exists
-            Offer offer = GetOffer(offerHash);
+            Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty) return false;
 
             // Check that transaction is signed by the canceller
@@ -564,7 +561,7 @@ namespace switcheo
             TransferAssetTo(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount);
 
             // Remove offer
-            RemoveOffer(offerHash, offer);
+            RemoveOffer(tradingPair, offerHash);
 
             // Notify runtime
             Cancelled(offer.MakerAddress, offerHash);
@@ -775,139 +772,34 @@ namespace switcheo
             return false;
         }
 
-        private static Offer GetOffer(byte[] hash)
+        private static Offer GetOffer(byte[] tradingPair, byte[] hash)
         {
-            // Check that offer exists
-            var offerData = Storage.Get(Context(), hash);
-            if (offerData == Empty) return new Offer(); // invalid offer hash
+            byte[] offerData = Storage.Get(Context(), tradingPair.Concat(hash));
+            if (offerData.Length == 0) return new Offer();
 
-            // Deserialize offer
-            var index = 0;
-
-            var makerAddress = offerData.Range(index, 20);
-            index += 20;
-
-            var offerAssetIDLength = 20;
-            var wantAssetIDLength = 20;
-            var typeLength = 2;
-            var intLength = 8;
-            var orderHashLength = 32;
-
-            if (offerData.Range(index, typeLength) == SystemAsset) offerAssetIDLength = 32;
-            index += typeLength;
-
-            if (offerData.Range(index, typeLength) == SystemAsset) wantAssetIDLength = 32;
-            index += typeLength;
-
-            var offerAssetID = offerData.Range(index, offerAssetIDLength);
-            index += offerAssetIDLength;
-
-            var wantAssetID = offerData.Range(index, wantAssetIDLength);
-            index += wantAssetIDLength;
-
-            var offerAmount = offerData.Range(index, intLength);
-            index += intLength;
-
-            var wantAmount = offerData.Range(index, intLength);
-            index += intLength;
-
-            var availableAmount = offerData.Range(index, intLength);
-            index += intLength;
-
-            var previousOfferHash = offerData.Range(index, orderHashLength);
-            index += orderHashLength;
-
-            var nextOfferHash = offerData.Range(index, orderHashLength);
-            index += orderHashLength;
-
-            return NewOffer(makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, availableAmount, previousOfferHash, nextOfferHash);
+            return (Offer)Runtime.Deserialize(offerData);
         }
 
-        private static void StoreOffer(byte[] offerHash, Offer offer)
+        private static void StoreOffer(byte[] tradingPair, byte[] offerHash, Offer offer)
         {
             // Remove offer if completely filled
             if (offer.AvailableAmount == 0)
             {
-                RemoveOffer(offerHash, offer);
+                RemoveOffer(tradingPair, offerHash);
             }
             // Store offer otherwise
             else
             {
                 // Serialize offer
-                // TODO: we can save storage space by not storing assetCategory / IDs and force clients to walk the list
-                var offerData = offer.MakerAddress
-                                     .Concat(offer.OfferAssetCategory)
-                                     .Concat(offer.WantAssetCategory)
-                                     .Concat(offer.OfferAssetID)
-                                     .Concat(offer.WantAssetID)
-                                     .Concat(offer.OfferAmount.AsByteArray().Concat(Zeroes).Take(8))
-                                     .Concat(offer.WantAmount.AsByteArray().Concat(Zeroes).Take(8))
-                                     .Concat(offer.AvailableAmount.AsByteArray().Concat(Zeroes).Take(8))
-                                     .Concat(offer.PreviousOfferHash)
-                                     .Concat(offer.NextOfferHash);
-
-                Storage.Put(Context(), offerHash, offerData);
+                var offerData = Runtime.Serialize(offer);
+                Storage.Put(Context(), tradingPair.Concat(offerHash), offerData);
             }
         }
 
-        private static void AddOffer(byte[] offerHash, Offer offer)
+        private static void RemoveOffer(byte[] tradingPair, byte[] offerHash)
         {
-            var tradingPair = TradingPair(offer);
-            var previousOfferHash = Storage.Get(Context(), tradingPair);
-
-            // Add edges to the previous HEAD of the linked list for this trading pair
-            if (previousOfferHash != Null)
-            {
-                offer.PreviousOfferHash = previousOfferHash;
-                var previousOffer = GetOffer(previousOfferHash);
-                previousOffer.NextOfferHash = offerHash;
-                StoreOffer(previousOfferHash, previousOffer);
-            }
-
-            // Set the HEAD of the linked list for this trading pair as this offer
-            Storage.Put(Context(), tradingPair, offerHash);
-
-            // Store the new offer
-            StoreOffer(offerHash, offer);
-        }
-
-        private static void RemoveOffer(byte[] offerHash, Offer offer)
-        {
-            // Get the first item (head) in order book
-            var tradingPair = TradingPair(offer);
-            byte[] head = Storage.Get(Context(), tradingPair);
-
-            // Check if the offer is at the HEAD of the linked list
-            if (head == offerHash)
-            {
-                // There are more offers in this list so set the new HEAD of the linked list to the previous offer
-                if (offer.PreviousOfferHash != Null)
-                {
-                    Storage.Put(Context(), tradingPair, offer.PreviousOfferHash);
-                }
-                // Otherwise, just remove the whole list since this is the only offer left
-                else
-                {
-                    Storage.Delete(Context(), tradingPair);
-                }
-            }
-
-            // Combine nodes with an bi-directional edge
-            if (offer.NextOfferHash != Null)
-            {
-                var nextOffer = GetOffer(offer.NextOfferHash);
-                nextOffer.PreviousOfferHash = offer.PreviousOfferHash;
-                StoreOffer(offer.NextOfferHash, nextOffer);
-            }
-            if (offer.PreviousOfferHash != Null)
-            {
-                var previousOffer = GetOffer(offer.PreviousOfferHash);
-                previousOffer.NextOfferHash = offer.NextOfferHash;
-                StoreOffer(offer.PreviousOfferHash, previousOffer);
-            }
-
             // Delete offer data
-            Storage.Delete(Context(), offerHash);
+            Storage.Delete(Context(), tradingPair.Concat(offerHash));
         }
 
         private static ulong GetAmountForAssetInOutputs(byte[] assetID, TransactionOutput[] outputs)
@@ -985,6 +877,22 @@ namespace switcheo
             return true;
         }
 
+        private static BigInteger AmountToOffer(Offer o, BigInteger amount)
+        {
+            return (o.OfferAmount * amount) / o.WantAmount;
+        }
+
+        private static byte[] Hash(Offer o)
+        {
+            var bytes = o.MakerAddress
+                .Concat(TradingPair(o))
+                .Concat(o.OfferAmount.AsByteArray())
+                .Concat(o.WantAmount.AsByteArray())
+                .Concat(o.Nonce);
+
+            return Hash256(bytes);
+        }
+
         private static byte[] StoreKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
         private static byte[] WithdrawalKey(byte[] originator) => originator.Concat(Withdrawing);
         private static byte[] ForeignVolumeKey(byte[] assetID, BigInteger bucketNumber) => assetID.Concat(Foreign).Concat(bucketNumber.AsByteArray());
@@ -994,21 +902,5 @@ namespace switcheo
         private static byte[] StakedTotalKey(BigInteger bucketNumber) => StakedTotal.Concat(bucketNumber.AsByteArray());
         private static byte[] FeeAddressFor(BigInteger bucketNumber) => FeesAccumulated.Concat(bucketNumber.AsByteArray());
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID);
-
-        private static byte[] Hash(Offer o, byte[] nonce)
-        {
-            var bytes = o.MakerAddress
-                .Concat(TradingPair(o))
-                .Concat(o.OfferAmount.AsByteArray())
-                .Concat(o.WantAmount.AsByteArray())
-                .Concat(nonce);
-
-            return Hash256(bytes);
-        }
-
-        private static BigInteger AmountToOffer(Offer o, BigInteger amount)
-        {
-            return (o.OfferAmount * amount) / o.WantAmount;
-        }
     }
 }
