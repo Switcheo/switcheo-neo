@@ -11,6 +11,7 @@ namespace switcheo
     {
         public delegate object NEP5Contract(string method, object[] args);
 
+        // Events
         [DisplayName("created")]
         public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> Created; // (address, offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
@@ -32,6 +33,7 @@ namespace switcheo
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
+        // Broker Settings & Hardcaps
         private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
         private static readonly byte[] NativeToken = "AYdPyCbHS3MZoJDeZSntgdnDbpa5ScXade".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
@@ -45,25 +47,27 @@ namespace switcheo
         private static readonly byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawl & owner actions
 
         // Asset Categories
-        private static readonly byte[] Mark = { 0x50 };
-        private static readonly byte[] Withdraw = { 0x51 };
         private static readonly byte[] SystemAsset = { 0x99 };
         private static readonly byte[] NEP5 = { 0x98 };
+
+        // Native Token Flags
+        private static readonly byte[] Native = { 0x70 };
+        private static readonly byte[] Foreign = { 0x71 };
+
+        // Withdrawal Flags
+        private static readonly byte[] Mark = { 0x50 };
+        private static readonly byte[] Withdraw = { 0x51 };
         private static readonly byte TAUsage_WithdrawalStage = 0xa1;
         private static readonly byte TAUsage_NEP5AssetID = 0xa2;
         private static readonly byte TAUsage_SystemAssetID = 0xa3;
         private static readonly byte TAUsage_WithdrawalAddress = 0xa4;
         private static readonly byte TAUsage_AdditionalWitness = 0x20; // additional verification script which can be used to ensure any withdrawal txns are intended by the owner
 
-        // Flags / Byte Constants
+        // Byte Constants
         private static readonly byte[] Empty = { };
-        private static readonly byte[] Native = { 0x70 };
-        private static readonly byte[] Foreign = { 0x71 };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
-        private static StorageContext Context() => Storage.CurrentContext;
-        private static BigInteger CurrentBucket() => Runtime.Time / bucketDuration;
 
         private struct Offer
         {
@@ -245,7 +249,7 @@ namespace switcheo
                             Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
                         }
                         var amount = GetWithdrawAmount(withdrawingAddr, assetID);
-                        if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false;
+                        if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false; // TODO: if nep-5 withdraw fails for some reason funds can get stuck?
                         Withdrawn(withdrawingAddr, assetID, amount);
                         return true;
                     }
@@ -325,6 +329,21 @@ namespace switcheo
                 {
                     if (args.Length != 1) return false;
                     return SetFeeAddress((byte[])args[0]);
+                }
+                if (operation == "addToWhitelist")
+                {
+                    if (args.Length != 1) return false;
+                    if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return false;
+                    Storage.Put(Context(), WhitelistKey((byte[])args[0]), "1");
+                }
+                if (operation == "removeFromWhitelist")
+                {
+                    if (args.Length != 1) return false;
+                    Storage.Delete(Context(), WhitelistKey((byte[])args[0]));
+                }
+                if (operation == "destroyWhitelist")
+                {
+                    Storage.Put(Context(), "stateContractWhitelist", Inactive);
                 }
             }
 
@@ -625,6 +644,7 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Just transfer immediately or fail as this is the last step in verification
+                if (!VerifyContract(assetID)) return false;
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
                 var Contract = (NEP5Contract)assetID.ToDelegate();
                 var transferSuccessful = (bool)Contract("transfer", args);
@@ -633,6 +653,12 @@ namespace switcheo
 
             // Unknown asset category
             return false;
+        }
+
+        private static bool VerifyContract(byte[] assetID)
+        {
+            if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return true;
+            return Storage.Get(Context(), WhitelistKey(assetID)).Length > 0;
         }
 
         private static Offer GetOffer(byte[] tradingPair, byte[] hash)
@@ -718,6 +744,7 @@ namespace switcheo
         private static bool WithdrawNEP5(byte[] address, byte[] assetID, BigInteger amount)
         {
             // Transfer token
+            if (!VerifyContract(assetID)) return false;
             var args = new object[] { ExecutionEngine.ExecutingScriptHash, address, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
             bool transferSuccessful = (bool)contract("transfer", args);
@@ -778,11 +805,17 @@ namespace switcheo
             return Hash256(bytes);
         }
 
+        // Helpers
+        private static StorageContext Context() => Storage.CurrentContext;
+        private static BigInteger CurrentBucket() => Runtime.Time / bucketDuration;
         private static byte[] IndexAsByteArray(ushort index) => index > 0 ? ((BigInteger)index).AsByteArray() : Empty;
+        private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID);
+
+        // Keys
+        private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => originator.Concat(assetID).Concat(Withdraw);
         private static byte[] ForeignVolumeKey(byte[] assetID, BigInteger bucketNumber) => assetID.Concat(Foreign).Concat(bucketNumber.AsByteArray());
         private static byte[] NativeVolumeKey(byte[] assetID, BigInteger bucketNumber) => assetID.Concat(Native).Concat(bucketNumber.AsByteArray());
-        private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID);
     }
 }
