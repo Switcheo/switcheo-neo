@@ -475,26 +475,19 @@ namespace switcheo
             {
                 // Notify clients of failure
                 Failed(fillerAddress, offerHash);
-                return true; // TODO: can we return false?
+                return true;
             }
 
             // Reduce available balance for the filled asset and amount
             if (!ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill)) return false;
 
             // Calculate offered amount and fees
+            byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             BigInteger makerFeeRate = GetMakerFee();
             BigInteger takerFeeRate = GetTakerFee();
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
             BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
-
-            // Move fees
-            var feeAddress = Storage.Get(Context(), "feeAddress");
-            TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
-            TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
-
-            // Move asset to the maker balance and notify clients
-            TransferAssetTo(offer.MakerAddress, offer.WantAssetID, amountToFill - makerFee);
-            Transferred(offer.MakerAddress, offer.WantAssetID, amountToFill - makerFee);
+            BigInteger nativeFee = 0;
 
             // Move asset to the taker balance and notify clients
             if (useNativeTokens)
@@ -505,21 +498,34 @@ namespace switcheo
                 // Derive rate from volumes traded
                 var nativeVolume = Storage.Get(Context(), NativeVolumeKey(offer.OfferAssetID, bucketNumber)).AsBigInteger();
                 var otherVolume = Storage.Get(Context(), ForeignVolumeKey(offer.OfferAssetID, bucketNumber)).AsBigInteger();
-                BigInteger nativeFee = 0;
+
+                // Use native fee, if we can get an exchange rate
                 if (otherVolume > 0)
                 {
-                    // use native fee, if we can get an exchange rate
                     nativeFee = (takerFee * nativeVolume) / (otherVolume * nativeTokenDiscount);
                 }
-                ReduceBalance(fillerAddress, NativeToken, nativeFee);
-                TransferAssetTo(fillerAddress, offer.OfferAssetID, amountToOffer);
-                Transferred(fillerAddress, offer.OfferAssetID, amountToOffer);
+
+                // Reduce balance immediately from taker
+                if (!ReduceBalance(fillerAddress, NativeToken, nativeFee))
+                {
+                    // Reset to 0 if balance is insufficient
+                    nativeFee = 0;
+                }
             }
-            else
-            {
-                TransferAssetTo(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
-                Transferred(fillerAddress, offer.OfferAssetID, amountToOffer - takerFee);
-            }
+
+            // Move asset to the taker balance and notify clients
+            var takerAmount = amountToOffer - (nativeFee > 0 ? 0 : takerFee);
+            TransferAssetTo(fillerAddress, offer.OfferAssetID, takerAmount);
+            Transferred(fillerAddress, offer.OfferAssetID, takerAmount);
+
+            // Move asset to the maker balance and notify clients
+            var makerAmount = amountToFill - makerFee;
+            TransferAssetTo(offer.MakerAddress, offer.WantAssetID, makerAmount);
+            Transferred(offer.MakerAddress, offer.WantAssetID, makerAmount);
+
+            // Move fees
+            TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
+            if (nativeFee == 0) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
             // Update native token exchange rate
             if (offer.OfferAssetID == NativeToken)
