@@ -57,6 +57,8 @@ namespace switcheo
         // Withdrawal Flags
         private static readonly byte[] Mark = { 0x50 };
         private static readonly byte[] Withdraw = { 0x51 };
+        private static readonly byte[] OpCode_TailCall = { 0x69 };
+        private static readonly byte Type_InvocationTransaction = 0xd1;
         private static readonly byte TAUsage_WithdrawalStage = 0xa1;
         private static readonly byte TAUsage_NEP5AssetID = 0xa2;
         private static readonly byte TAUsage_SystemAssetID = 0xa3;
@@ -202,7 +204,10 @@ namespace switcheo
                 foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
                 if (totalIn != totalOut) return false;
 
-                // TODO: Check that Application trigger will be tail called
+                // Check that Application trigger will be tail called
+                if (currentTxn.Type != Type_InvocationTransaction) return false;
+                var invocationTransaction = (InvocationTransaction)currentTxn;
+                if (invocationTransaction.Script != OpCode_TailCall.Concat(ExecutionEngine.ExecutingScriptHash)) return false; 
 
                 return true;
             }
