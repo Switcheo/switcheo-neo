@@ -385,14 +385,14 @@ namespace switcheo
             return new BigInteger[] { otherVolume, nativeVolume };
         }
 
-        private static byte[][] GetOffers(byte[] tradingPair, int count) // offerAssetID.Concat(wantAssetID)
+        private static Offer[] GetOffers(byte[] tradingPair, int count) // offerAssetID.Concat(wantAssetID)
         {
-            var result = new byte[count][]; // TODO: dynamic initialization doesn't work?
+            var result = new Offer[50]; // TODO: dynamic initialization doesn't work?
             var i = 0;
             var it = Storage.Find(Context(), tradingPair);
             do
             {
-                result[i] = it.Value;
+                result[i] = (Offer)Runtime.Deserialize(it.Value);
             } while (it.Next() != null && i < count && i < 50);
 
             return result;
@@ -777,6 +777,7 @@ namespace switcheo
             byte[] offerData = Storage.Get(Context(), tradingPair.Concat(hash));
             if (offerData.Length == 0) return new Offer();
 
+            Runtime.Log("Deserializing offer");
             return (Offer)Runtime.Deserialize(offerData);
         }
 
@@ -791,7 +792,10 @@ namespace switcheo
             else
             {
                 // Serialize offer
+                Runtime.Log("Serializing offer");
                 var offerData = Runtime.Serialize(offer);
+                Runtime.Log("Done serializing offer");
+                Runtime.Notify("offerData", offerData);
                 Storage.Put(Context(), tradingPair.Concat(offerHash), offerData);
             }
         }
