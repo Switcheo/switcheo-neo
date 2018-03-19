@@ -125,14 +125,12 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
-            // Prepare vars
-            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-            var withdrawalStage = WithdrawalStage(currentTxn);
-
             if (Runtime.Trigger == TriggerType.Verification)
             {
                 if (GetState() != Active) return false;
 
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                var withdrawalStage = WithdrawalStage(currentTxn);
                 var withdrawingAddr = GetWithdrawalAddress(currentTxn, withdrawalStage);
                 var assetID = GetWithdrawalAsset(currentTxn);
                 var isWithdrawingNEP5 = assetID.Length == 20;
@@ -207,59 +205,12 @@ namespace switcheo
                 // Check that Application trigger will be tail called
                 if (currentTxn.Type != Type_InvocationTransaction) return false;
                 var invocationTransaction = (InvocationTransaction)currentTxn;
-                if (invocationTransaction.Script != OpCode_TailCall.Concat(ExecutionEngine.ExecutingScriptHash)) return false; 
+                if (invocationTransaction.Script != OpCode_TailCall.Concat(ExecutionEngine.ExecutingScriptHash).Concat("0000".AsByteArray())) return false; 
 
                 return true;
             }
             else if (Runtime.Trigger == TriggerType.Application)
             {
-                // == Withdrawal ==
-                if (withdrawalStage.Length > 0)
-                {
-                    var withdrawingAddr = GetWithdrawalAddress(currentTxn, withdrawalStage);
-                    var assetID = GetWithdrawalAsset(currentTxn);
-                    var isWithdrawingNEP5 = assetID.Length == 20;
-                    var inputs = currentTxn.GetInputs();
-                    var outputs = currentTxn.GetOutputs();
-
-                    if (withdrawalStage == Mark)
-                    {
-                        var amount = GetBalance(withdrawingAddr, assetID);
-                        MarkWithdrawal(withdrawingAddr, assetID, amount);
-                        if (isWithdrawingNEP5)
-                        {
-                            Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
-                        }
-                        else
-                        {
-                            ulong sum = 0;
-                            for (ushort index = 0; index < outputs.Length; index++)
-                            {
-                                sum += (ulong)outputs[index].Value;
-                                Runtime.Log("Output check..");
-                                if (sum <= amount)
-                                {
-                                    Runtime.Log("Reserving...");
-                                    Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(index)), withdrawingAddr);
-                                }
-                            }
-                        }
-                        Withdrawing(withdrawingAddr, assetID, amount);
-                        return true;
-                    }
-                    else if (withdrawalStage == Withdraw)
-                    {
-                        foreach (var i in inputs)
-                        {
-                            Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
-                        }
-                        var amount = GetWithdrawAmount(withdrawingAddr, assetID);
-                        if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false; // TODO: if nep-5 withdraw fails for some reason funds can get stuck?
-                        Withdrawn(withdrawingAddr, assetID, amount);
-                        return true;
-                    }
-                }
-
                 // == Init ==
                 if (operation == "initialize")
                 {
@@ -277,7 +228,7 @@ namespace switcheo
                 if (operation == "getMakerFee") return GetMakerFee();
                 if (operation == "getTakerFee") return GetTakerFee();
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
-                if (operation == "getOffers") return GetOffers((byte[])args[0], (int)args[1]);
+                if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
 
                 // == Execute ==
@@ -307,6 +258,12 @@ namespace switcheo
                     if (GetState() == Pending) return false;
                     if (args.Length != 2) return false;
                     return CancelOffer((byte[])args[0], (byte[])args[1]);
+                }
+
+                // == Withdrawal ==
+                if (operation == "") // TODO: use proper operation?
+                {
+                    return ProcessWithdrawal();
                 }
 
                 // == Owner ==
@@ -401,15 +358,27 @@ namespace switcheo
             return new BigInteger[] { otherVolume, nativeVolume };
         }
 
-        private static Offer[] GetOffers(byte[] tradingPair, int count) // offerAssetID.Concat(wantAssetID)
+        private static Offer[] GetOffers(byte[] tradingPair, BigInteger count) // offerAssetID.Concat(wantAssetID)
         {
             var result = new Offer[50]; // TODO: dynamic initialization doesn't work?
+
+            byte[] keySize = Empty;
+            var prefixLength = tradingPair.Length;
+            if (prefixLength == 40) keySize = new byte[] { 0x48 }; // tradingPair size (prefix 40/52/64) + offerHash size (32)
+            else if (prefixLength == 52) keySize = new byte[] { 0x54 };
+            else if (prefixLength == 64) keySize = new byte[] { 0x60 };
+
+            // TODO: allow iteration until start offerHash or offset?
             var i = 0;
-            var it = Storage.Find(Context(), tradingPair);
-            do
+            var it = Storage.Find(Context(), keySize.Concat(tradingPair));
+            while (it.Next() && i < count && i < 50)
             {
-                result[i] = (Offer)Runtime.Deserialize(it.Value);
-            } while (it.Next() != null && i < count && i < 50);
+                var value = it.Value;
+                var bytes = Runtime.Deserialize(value);
+                var offer = (Offer)bytes;
+                result[i] = offer;
+                i++;
+            }
 
             return result;
         }
@@ -607,6 +576,59 @@ namespace switcheo
             Storage.Put(Context(), "feeAddress", feeAddress);
 
             return true;
+        }
+
+        private static object ProcessWithdrawal()
+        {
+            Runtime.Log("withdrawing");
+            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            var withdrawalStage = WithdrawalStage(currentTxn);
+            if (withdrawalStage == Empty) return false;
+
+            var withdrawingAddr = GetWithdrawalAddress(currentTxn, withdrawalStage);
+            var assetID = GetWithdrawalAsset(currentTxn);
+            var isWithdrawingNEP5 = assetID.Length == 20;
+            var inputs = currentTxn.GetInputs();
+            var outputs = currentTxn.GetOutputs();
+
+            if (withdrawalStage == Mark)
+            {
+                var amount = GetBalance(withdrawingAddr, assetID);
+                MarkWithdrawal(withdrawingAddr, assetID, amount);
+                if (isWithdrawingNEP5)
+                {
+                    Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
+                }
+                else
+                {
+                    ulong sum = 0;
+                    for (ushort index = 0; index < outputs.Length; index++)
+                    {
+                        sum += (ulong)outputs[index].Value;
+                        Runtime.Log("Output check..");
+                        if (sum <= amount)
+                        {
+                            Runtime.Log("Reserving...");
+                            Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(index)), withdrawingAddr);
+                        }
+                    }
+                }
+                Withdrawing(withdrawingAddr, assetID, amount);
+                return true;
+            }
+            else if (withdrawalStage == Withdraw)
+            {
+                foreach (var i in inputs)
+                {
+                    Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
+                }
+                var amount = GetWithdrawAmount(withdrawingAddr, assetID);
+                if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false; // TODO: if nep-5 withdraw fails for some reason funds can get stuck?
+                Withdrawn(withdrawingAddr, assetID, amount);
+                return true;
+            }
+
+            return false;
         }
 
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID)
