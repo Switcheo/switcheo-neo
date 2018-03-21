@@ -70,6 +70,7 @@ namespace switcheo
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
+        private static readonly byte[] WithdrawArgs = new byte[] { 0x00, 0xc1, 0x08 }.Concat("withdraw".AsByteArray()); // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
 
         private struct Offer
         {
@@ -127,7 +128,7 @@ namespace switcheo
         {
             if (Runtime.Trigger == TriggerType.Verification)
             {
-                if (GetState() != Active) return false;
+                if (GetState() == Pending) return false;
 
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 var withdrawalStage = WithdrawalStage(currentTxn);
@@ -205,7 +206,7 @@ namespace switcheo
                 // Check that Application trigger will be tail called
                 if (currentTxn.Type != Type_InvocationTransaction) return false;
                 var invocationTransaction = (InvocationTransaction)currentTxn;
-                if (invocationTransaction.Script != OpCode_TailCall.Concat(ExecutionEngine.ExecutingScriptHash).Concat("0000".AsByteArray())) return false; 
+                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false; 
 
                 return true;
             }
@@ -261,7 +262,7 @@ namespace switcheo
                 }
 
                 // == Withdrawal ==
-                if (operation == "") // TODO: use proper operation?
+                if (operation == "withdraw")
                 {
                     return ProcessWithdrawal();
                 }
