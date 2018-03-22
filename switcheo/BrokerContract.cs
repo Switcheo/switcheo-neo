@@ -347,7 +347,7 @@ namespace switcheo
 
         private static BigInteger GetWithdrawAmount(byte[] originator, byte[] assetID)
         {
-            return Storage.Get(Context(), BalanceKey(originator, assetID)).AsBigInteger();
+            return Storage.Get(Context(), WithdrawKey(originator, assetID)).AsBigInteger();
         }
 
         private static BigInteger[] GetExchangeRate(byte[] assetID) // against native token
@@ -363,15 +363,9 @@ namespace switcheo
         {
             var result = new Offer[50]; // TODO: dynamic initialization doesn't work?
 
-            byte[] keySize = Empty;
-            var prefixLength = tradingPair.Length;
-            if (prefixLength == 40) keySize = new byte[] { 0x48 }; // tradingPair size (prefix 40/52/64) + offerHash size (32)
-            else if (prefixLength == 52) keySize = new byte[] { 0x54 };
-            else if (prefixLength == 64) keySize = new byte[] { 0x60 };
-
             // TODO: allow iteration until start offerHash or offset?
             var i = 0;
-            var it = Storage.Find(Context(), keySize.Concat(tradingPair));
+            var it = Storage.Find(Context(), tradingPair);
             while (it.Next() && i < count && i < 50)
             {
                 var value = it.Value;
