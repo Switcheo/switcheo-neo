@@ -260,8 +260,6 @@ namespace switcheo
                     if (args.Length != 2) return false;
                     return CancelOffer((byte[])args[0], (byte[])args[1]);
                 }
-
-                // == Withdrawal ==
                 if (operation == "withdraw")
                 {
                     return ProcessWithdrawal();
@@ -638,8 +636,11 @@ namespace switcheo
                 {
                     Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
                 }
+
                 var amount = GetWithdrawAmount(withdrawingAddr, assetID);
                 if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false; // TODO: if nep-5 withdraw fails for some reason funds can get stuck?
+
+                Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
                 Withdrawn(withdrawingAddr, assetID, amount);
                 return true;
             }
