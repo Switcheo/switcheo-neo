@@ -35,7 +35,7 @@ namespace switcheo
 
         // Broker Settings & Hardcaps
         private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
-        private static readonly byte[] NativeToken = "AYdPyCbHS3MZoJDeZSntgdnDbpa5ScXade".ToScriptHash();
+        private static readonly byte[] NativeToken = "AbwJtGDCcwoH2HhDmDq12ZcqFmUpCU3XMp".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
         private const int bucketDuration = 82800; // 82800secs = 23hrs
@@ -161,7 +161,7 @@ namespace switcheo
                         if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
                         if (o.AssetId != authorizedAssetID) return false;
                     }
-                    // TODO: should also check outputs.Length for SystemAsset (at most +1 of required)
+                    // TODO: should also check outputs.Length for SystemAsset (at most +1 of required) to prevent DOS
 
                     // Check that NEP5 withdrawals don't reserve more utxos than required
                     if (isWithdrawingNEP5)
@@ -203,10 +203,10 @@ namespace switcheo
                 foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
                 if (totalIn != totalOut) return false;
 
-                // Check that Application trigger will be tail called
+                // Check that Application trigger will be tail called with the correct params
                 if (currentTxn.Type != Type_InvocationTransaction) return false;
                 var invocationTransaction = (InvocationTransaction)currentTxn;
-                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false; 
+                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
 
                 return true;
             }
@@ -226,8 +226,8 @@ namespace switcheo
 
                 // == Getters ==
                 if (operation == "getState") return GetState();
-                if (operation == "getMakerFee") return GetMakerFee();
-                if (operation == "getTakerFee") return GetTakerFee();
+                if (operation == "getMakerFee") return GetMakerFee(Empty);
+                if (operation == "getTakerFee") return GetTakerFee(Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
@@ -283,10 +283,15 @@ namespace switcheo
                     Storage.Put(Context(), "state", Active);
                     return true;
                 }
-                if (operation == "setFees")
+                if (operation == "setMakerFee")
                 {
                     if (args.Length != 2) return false;
-                    return SetFees((BigInteger)args[0], (BigInteger)args[1]);
+                    return SetMakerFee((BigInteger)args[0], (byte[])args[1]);
+                }
+                if (operation == "setTakerFee")
+                {
+                    if (args.Length != 2) return false;
+                    return SetTakerFee((BigInteger)args[0], (byte[])args[1]);
                 }
                 if (operation == "setFeeAddress")
                 {
@@ -316,7 +321,8 @@ namespace switcheo
         private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
         {
             if (GetState() != Pending) return false;
-            if (!SetFees(takerFee, makerFee)) return false;
+            if (!SetMakerFee(makerFee, Empty)) return false;
+            if (!SetTakerFee(takerFee, Empty)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
 
             Storage.Put(Context(), "state", Active);
@@ -330,13 +336,19 @@ namespace switcheo
             return Storage.Get(Context(), "state");
         }
 
-        private static BigInteger GetMakerFee()
+        private static BigInteger GetMakerFee(byte[] assetID)
         {
+            var fee = Storage.Get(Context(), "makerFee".AsByteArray().Concat(assetID));
+            if (fee.Length != 0 || assetID.Length == 0) return fee.AsBigInteger();
+
             return Storage.Get(Context(), "makerFee").AsBigInteger();
         }
 
-        private static BigInteger GetTakerFee()
+        private static BigInteger GetTakerFee(byte[] assetID)
         {
+            var fee = Storage.Get(Context(), "takerFee".AsByteArray().Concat(assetID));
+            if (fee.Length != 0 || assetID.Length == 0) return fee.AsBigInteger();
+
             return Storage.Get(Context(), "takerFee").AsBigInteger();
         }
 
@@ -447,8 +459,8 @@ namespace switcheo
 
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
-            BigInteger makerFeeRate = GetMakerFee();
-            BigInteger takerFeeRate = GetTakerFee();
+            BigInteger makerFeeRate = GetMakerFee(offer.OfferAssetID);
+            BigInteger takerFeeRate = GetTakerFee(offer.WantAssetID);
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
             BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
             BigInteger nativeFee = 0;
@@ -554,13 +566,22 @@ namespace switcheo
             return true;
         }
                         
-        private static bool SetFees(BigInteger takerFee, BigInteger makerFee)
+        private static bool SetMakerFee(BigInteger fee, byte[] assetID)
         {
-            if (takerFee > maxFee || makerFee > maxFee) return false;
-            if (takerFee < 0 || makerFee < 0) return false;
+            if (fee > maxFee) return false;
+            if (fee < 0) return false;
 
-            Storage.Put(Context(), "takerFee", takerFee);
-            Storage.Put(Context(), "makerFee", makerFee);
+            Storage.Put(Context(), "makerFee".AsByteArray().Concat(assetID), fee);
+
+            return true;
+        }
+
+        private static bool SetTakerFee(BigInteger fee, byte[] assetID)
+        {
+            if (fee > maxFee) return false;
+            if (fee < 0) return false;
+
+            Storage.Put(Context(), "takerFee".AsByteArray().Concat(assetID), fee);
 
             return true;
         }
