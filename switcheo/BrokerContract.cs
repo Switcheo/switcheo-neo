@@ -4,6 +4,7 @@ using Neo.SmartContract.Framework.Services.System;
 using System;
 using System.ComponentModel;
 using System.Numerics;
+using System.Collections.Generic;
 
 namespace switcheo
 {
@@ -379,7 +380,7 @@ namespace switcheo
             while (it.Next() && i < count && i < 50)
             {
                 var value = it.Value;
-                var bytes = Runtime.Deserialize(value);
+                var bytes = value.Deserialize();
                 var offer = (Offer)bytes;
                 result[i] = offer;
                 i++;
@@ -510,12 +511,13 @@ namespace switcheo
                 // Increase native token total by amountToOffer
                 var nativeKey = NativeVolumeKey(offer.WantAssetID, bucketNumber);
                 var nativeVolume = Storage.Get(Context(), nativeKey).AsBigInteger();
+                
                 Storage.Put(Context(), nativeKey, nativeVolume + amountToOffer);
 
                 // Increase other token total by amountToFill                
                 var otherKey = ForeignVolumeKey(offer.WantAssetID, bucketNumber);
                 var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
-                Storage.Put(Context(), nativeKey, otherVolume + amountToFill);
+                Storage.Put(Context(), otherKey, otherVolume + amountToFill);
             }
             if (offer.WantAssetID == NativeToken)
             {
@@ -530,7 +532,7 @@ namespace switcheo
                 // Increase other token total by amountToFill                
                 var otherKey = ForeignVolumeKey(offer.OfferAssetID, bucketNumber);
                 var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
-                Storage.Put(Context(), nativeKey, otherVolume + amountToOffer);
+                Storage.Put(Context(), otherKey, otherVolume + amountToOffer);
             }
 
             // Update available amount
@@ -719,7 +721,7 @@ namespace switcheo
             if (offerData.Length == 0) return new Offer();
 
             Runtime.Log("Deserializing offer");
-            return (Offer)Runtime.Deserialize(offerData);
+            return (Offer)offerData.Deserialize();
         }
 
         private static void StoreOffer(byte[] tradingPair, byte[] offerHash, Offer offer)
@@ -734,7 +736,7 @@ namespace switcheo
             {
                 // Serialize offer
                 Runtime.Log("Serializing offer");
-                var offerData = Runtime.Serialize(offer);
+                var offerData = offer.Serialize();
                 Storage.Put(Context(), tradingPair.Concat(offerHash), offerData);
             }
         }
