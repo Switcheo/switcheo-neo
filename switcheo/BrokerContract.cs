@@ -438,15 +438,14 @@ namespace switcheo
             if (fillerAddress == offer.MakerAddress) return false;
 
             // Calculate max amount that can be offered & filled
-            BigInteger amountToOffer = (offer.OfferAmount * amountToFill) / offer.WantAmount;
-            if (amountToOffer > offer.AvailableAmount)
+            BigInteger amountToTake = (offer.OfferAmount * amountToFill) / offer.WantAmount;
+            if (amountToTake > offer.AvailableAmount)
             {
-                amountToOffer = offer.AvailableAmount;
-                amountToFill = (amountToOffer * offer.WantAmount) / offer.OfferAmount;
+                amountToTake = offer.AvailableAmount;
+                amountToFill = (amountToTake * offer.WantAmount) / offer.OfferAmount;
             }
-
-            // Check that the amount available is sufficient
-            if (amountToOffer < 1 || amountToFill < 1)
+            // Check that the amount that will be given is at least 1
+            if (amountToTake <= 0)
             {
                 // Notify clients of failure
                 Failed(fillerAddress, offerHash);
@@ -454,14 +453,14 @@ namespace switcheo
             }
 
             // Reduce available balance for the filled asset and amount
-            if (!ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill)) return false;
+            if (amountToFill > 0 && !ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill)) return false;
 
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             BigInteger makerFeeRate = GetMakerFee(offer.OfferAssetID);
             BigInteger takerFeeRate = GetTakerFee(offer.WantAssetID);
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
-            BigInteger takerFee = (amountToOffer * takerFeeRate) / feeFactor;
+            BigInteger takerFee = (amountToTake * takerFeeRate) / feeFactor;
             BigInteger nativeFee = 0;
 
             // Move asset to the taker balance and notify clients
@@ -489,7 +488,7 @@ namespace switcheo
             }
 
             // Move asset to the taker balance and notify clients
-            var takerAmount = amountToOffer - (nativeFee > 0 ? 0 : takerFee);
+            var takerAmount = amountToTake - (nativeFee > 0 ? 0 : takerFee);
             TransferAssetTo(fillerAddress, offer.OfferAssetID, takerAmount);
             Transferred(fillerAddress, offer.OfferAssetID, takerAmount);
 
@@ -512,7 +511,7 @@ namespace switcheo
                 var nativeKey = NativeVolumeKey(offer.WantAssetID, bucketNumber);
                 var nativeVolume = Storage.Get(Context(), nativeKey).AsBigInteger();
                 
-                Storage.Put(Context(), nativeKey, nativeVolume + amountToOffer);
+                Storage.Put(Context(), nativeKey, nativeVolume + amountToTake);
 
                 // Increase other token total by amountToFill                
                 var otherKey = ForeignVolumeKey(offer.WantAssetID, bucketNumber);
@@ -532,11 +531,11 @@ namespace switcheo
                 // Increase other token total by amountToFill                
                 var otherKey = ForeignVolumeKey(offer.OfferAssetID, bucketNumber);
                 var otherVolume = Storage.Get(Context(), otherKey).AsBigInteger();
-                Storage.Put(Context(), otherKey, otherVolume + amountToOffer);
+                Storage.Put(Context(), otherKey, otherVolume + amountToTake);
             }
 
             // Update available amount
-            offer.AvailableAmount = offer.AvailableAmount - amountToOffer;
+            offer.AvailableAmount = offer.AvailableAmount - amountToTake;
 
             // Store updated offer
             StoreOffer(tradingPair, offerHash, offer);
