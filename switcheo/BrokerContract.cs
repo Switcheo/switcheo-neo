@@ -498,7 +498,7 @@ namespace switcheo
             Transferred(offer.MakerAddress, offer.WantAssetID, makerAmount);
 
             // Move fees
-            TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
+            if (makerFee > 0) TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
             if (nativeFee == 0) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
             // Update native token exchange rate
@@ -676,17 +676,19 @@ namespace switcheo
                     }
                 }
 
-                // Get previously consumed amount wihtin same transaction
-                var consumedAmount = Storage.Get(Context(), currentTxn.Hash.Concat(assetID)).AsBigInteger();
-
-                // Check that the sent amount is still sufficient
-                if (sentAmount - consumedAmount < amount) {
-                    Runtime.Log("Not enough of asset sent");
+                // Check that the sent amount is correct
+                if (sentAmount != amount)
+                {
+                    Runtime.Log("Wrong amount sent");
                     return false;
                 }
 
+                // Check that there is no double deposit
+                var alreadyVerified = Storage.Get(Context(), currentTxn.Hash.Concat(assetID)).Length > 0;
+                if (alreadyVerified) return false;
+
                 // Update the consumed amount for this txn
-                Storage.Put(Context(), currentTxn.Hash.Concat(assetID), consumedAmount + amount);
+                Storage.Put(Context(), currentTxn.Hash.Concat(assetID), 1);
 
                 // TODO: how to cleanup?
                 return true;
@@ -733,8 +735,6 @@ namespace switcheo
                 // Serialize offer
                 Runtime.Log("Serializing offer");
                 var offerData = Runtime.Serialize(offer);
-                Runtime.Log("Done serializing offer");
-                Runtime.Notify("offerData", offerData);
                 Storage.Put(Context(), tradingPair.Concat(offerHash), offerData);
             }
         }
