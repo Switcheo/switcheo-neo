@@ -4,7 +4,6 @@ using Neo.SmartContract.Framework.Services.System;
 using System;
 using System.ComponentModel;
 using System.Numerics;
-using System.Collections.Generic;
 
 namespace switcheo
 {
@@ -838,9 +837,9 @@ namespace switcheo
             return Hash256(bytes);
         }
 
-        private static Dictionary<byte[], BigInteger> Volumes(BigInteger bucketNumber) 
+        private static Map<byte[], BigInteger> Volumes(BigInteger bucketNumber) 
         {
-            return (Dictionary<byte[], BigInteger>)Storage.Get(Context(), VolumesKey(bucketNumber)).Deserialize();
+            return (Map<byte[], BigInteger>)Storage.Get(Context(), VolumesKey(bucketNumber)).Deserialize();
         }
 
         // Add volume to the current reference assetID e.g. NEO/SWH: Add nativeAmount to SWH volume and foreignAmount to NEO volume
@@ -850,11 +849,18 @@ namespace switcheo
 
 
             // Retrieve all volumes from current 24 hr bucket
-            Dictionary<byte[], BigInteger> volumes = Volumes(bucketNumber);
+            Map<byte[], BigInteger> volumes = Volumes(bucketNumber);
 
             // Get total foreign and native values for current reference asset
-            volumes.TryGetValue(assetID.Concat(Native), out BigInteger nativeVolume);
-            volumes.TryGetValue(assetID.Concat(Foreign), out BigInteger foreignVolume);
+            BigInteger nativeVolume = 0;
+            BigInteger foreignVolume = 0;
+            if (volumes.HasKey(assetID.Concat(Native))) {
+                nativeVolume = volumes[assetID.Concat(Native)];
+            }
+            if (volumes.HasKey(assetID.Concat(Foreign)))
+            {
+                foreignVolume = volumes[assetID.Concat(Foreign)];
+            }
 
             // Add to foreign and native for current reference asset
             volumes[assetID.Concat(Native)] = nativeVolume + nativeAmount;
@@ -866,15 +872,23 @@ namespace switcheo
             return true;
         }
 
-        // Retrieves the native and foreign volume of a reference assetId
-        private static BigInteger[] GetVolume(BigInteger bucketNumber, byte[] assetId)
+        // Retrieves the native and foreign volume of a reference assetID
+        private static BigInteger[] GetVolume(BigInteger bucketNumber, byte[] assetID)
         {
             // Retrieve all volumes from current 24 hr bucket
-            Dictionary<byte[], BigInteger> volumes = Volumes(bucketNumber);
+            Map<byte[], BigInteger> volumes = Volumes(bucketNumber);
 
             // Get total foreign and native values for current reference asset
-            volumes.TryGetValue(assetId.Concat(Native), out BigInteger nativeVolume);
-            volumes.TryGetValue(assetId.Concat(Foreign), out BigInteger foreignVolume);
+            BigInteger nativeVolume = 0;
+            BigInteger foreignVolume = 0;
+            if (volumes.HasKey(assetID.Concat(Native)))
+            {
+                nativeVolume = volumes[assetID.Concat(Native)];
+            }
+            if (volumes.HasKey(assetID.Concat(Foreign)))
+            {
+                foreignVolume = volumes[assetID.Concat(Foreign)];
+            }
 
             return new BigInteger[] { nativeVolume, foreignVolume };
         }
