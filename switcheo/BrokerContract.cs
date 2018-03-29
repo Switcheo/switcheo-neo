@@ -362,9 +362,9 @@ namespace switcheo
             return Storage.Get(Context(), WithdrawKey(originator, assetID)).AsBigInteger();
         }
 
-        private static BigInteger[] GetExchangeRate(byte[] assetID) // against native token
+        private static Volume GetExchangeRate(byte[] assetID) // against native token
         {
-            var bucketNumber = CurrentBucket() - 1;
+            var bucketNumber = CurrentBucket();
             return GetVolume(bucketNumber, assetID);
         }
 
@@ -468,12 +468,12 @@ namespace switcheo
             else if (useNativeTokens)
             {
                 // Use previous trading period's exchange rate
-                var bucketNumber = CurrentBucket() - 1;
-                BigInteger[] volumes = GetVolume(bucketNumber, offer.OfferAssetID);
+                var bucketNumber = CurrentBucket();
+                Volume volume = GetVolume(bucketNumber, offer.OfferAssetID);
 
                 // Derive rate from volumes traded
-                var nativeVolume = volumes[0];
-                var foreignVolume = volumes[1];
+                var nativeVolume = volume.Native;
+                var foreignVolume = volume.Foreign;
 
                 // Use native fee, if we can get an exchange rate
                 if (foreignVolume > 0)
@@ -867,8 +867,8 @@ namespace switcheo
             {
                 Runtime.Log("Adding new volume");
                 volume = (Volume)volumeData.Deserialize();
-                volume.Native += nativeAmount;
-                volume.Foreign += foreignAmount;
+                volume.Native = volume.Native + nativeAmount;
+                volume.Foreign = volume.Foreign + foreignAmount;
                 Runtime.Log("Added new volume");
             }
 
@@ -881,16 +881,15 @@ namespace switcheo
         }
 
         // Retrieves the native and foreign volume of a reference assetID in the current 24 hr bucket
-        private static BigInteger[] GetVolume(BigInteger bucketNumber, byte[] assetID)
+        private static Volume GetVolume(BigInteger bucketNumber, byte[] assetID)
         {
             byte[] volumeData = Storage.Get(Context(), VolumeKey(bucketNumber, assetID));
             if (volumeData.Length == 0)
             {
-                return new BigInteger[] { 0, 0 };
+                return new Volume();
             }
             else {
-                var volume = (Volume)volumeData.Deserialize();
-                return new BigInteger[] { volume.Native, volume.Foreign };
+                return (Volume)volumeData.Deserialize();
             }
         }
 

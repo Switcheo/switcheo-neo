@@ -60,6 +60,7 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="Neo.ConvertTask.dll" />
+    <Content Include="Neo.SmartContract.Framework.dll" />
   </ItemGroup>
   <ItemGroup>
     <WCFMetadata Include="Connected Services\" />
