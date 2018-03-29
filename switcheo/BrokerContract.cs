@@ -454,14 +454,17 @@ namespace switcheo
 
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
-            BigInteger makerFeeRate = GetMakerFee(offer.OfferAssetID);
-            BigInteger takerFeeRate = GetTakerFee(offer.WantAssetID);
+            BigInteger makerFeeRate = GetMakerFee(offer.WantAssetID);
+            BigInteger takerFeeRate = GetTakerFee(offer.OfferAssetID);
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
             BigInteger takerFee = (amountToTake * takerFeeRate) / feeFactor;
             BigInteger nativeFee = 0;
 
-            // Move asset to the taker balance and notify clients
-            if (useNativeTokens)
+            // Calculate native fees (SWH)
+            if (offer.OfferAssetID == NativeToken) {
+                nativeFee = takerFee / nativeTokenDiscount;
+            }
+            else if (useNativeTokens)
             {
                 // Use previous trading period's exchange rate
                 var bucketNumber = CurrentBucket() - 1;
