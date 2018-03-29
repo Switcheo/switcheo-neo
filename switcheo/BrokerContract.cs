@@ -469,12 +469,12 @@ namespace switcheo
 
                 // Derive rate from volumes traded
                 var nativeVolume = volumes[0];
-                var otherVolume = volumes[1];
+                var foreignVolume = volumes[1];
 
                 // Use native fee, if we can get an exchange rate
-                if (otherVolume > 0)
+                if (foreignVolume > 0)
                 {
-                    nativeFee = (takerFee * nativeVolume) / (otherVolume * nativeTokenDiscount);
+                    nativeFee = (takerFee * nativeVolume) / (foreignVolume * nativeTokenDiscount);
                 }
 
                 // Reduce balance immediately from taker
@@ -502,13 +502,11 @@ namespace switcheo
             // Update native token exchange rate
             if (offer.OfferAssetID == NativeToken)
             {
-                // Adding volume to the current trading period: Increase native token total by amountToTake
-                AddVolume(offer.WantAssetID, amountToTake, amountToFill);
+                AddVolume(offer.WantAssetID, amountToFill, amountToTake);
             }
             if (offer.WantAssetID == NativeToken)
             {
-                // Adding volume to the current trading period
-                AddVolume(offer.WantAssetID, amountToTake, amountToFill);
+                AddVolume(offer.OfferAssetID, amountToTake, amountToFill);
             }
 
             // Update available amount
@@ -837,37 +835,33 @@ namespace switcheo
             return Hash256(bytes);
         }
 
-        private static Map<byte[], BigInteger> Volumes(BigInteger bucketNumber) 
-        {
-            return (Map<byte[], BigInteger>)Storage.Get(Context(), VolumesKey(bucketNumber)).Deserialize();
-        }
-
         // Add volume to the current reference assetID e.g. NEO/SWH: Add nativeAmount to SWH volume and foreignAmount to NEO volume
         private static bool AddVolume(byte[] assetID, BigInteger nativeAmount, BigInteger foreignAmount) 
         {
-            var bucketNumber = CurrentBucket();
-
-
             // Retrieve all volumes from current 24 hr bucket
-            Map<byte[], BigInteger> volumes = Volumes(bucketNumber);
+            Runtime.Log("getting volume key");
+            var bucketNumber = CurrentBucket();
+            var volumeKey = VolumesKey(bucketNumber);
+            Runtime.Log("got volume key");
+            var volumes = (Map<byte[], BigInteger>)Storage.Get(Context(), volumeKey).Deserialize();
+            Runtime.Log("got volume var");
 
             // Get total foreign and native values for current reference asset
-            BigInteger nativeVolume = 0;
-            BigInteger foreignVolume = 0;
-            if (volumes.HasKey(assetID.Concat(Native))) {
-                nativeVolume = volumes[assetID.Concat(Native)];
-            }
-            if (volumes.HasKey(assetID.Concat(Foreign)))
-            {
-                foreignVolume = volumes[assetID.Concat(Foreign)];
-            }
+            Runtime.Log("getting map keys");
+            var nativeKey = assetID.Concat(Native);
+            var foreignKey = assetID.Concat(Foreign);
+            Runtime.Log("got map keys");
 
             // Add to foreign and native for current reference asset
-            volumes[assetID.Concat(Native)] = nativeVolume + nativeAmount;
-            volumes[assetID.Concat(Foreign)] = foreignVolume + foreignAmount;
+            Runtime.Log("adding to map");
+            volumes[nativeKey] += nativeAmount;
+            volumes[foreignKey] += foreignAmount;
+            Runtime.Log("done adding to map");
 
             // Save to blockchain
-            Storage.Put(Context(), VolumesKey(bucketNumber), volumes.Serialize());
+            Runtime.Log("Serializing and storing");
+            Storage.Put(Context(), volumeKey, volumes.Serialize());
+            Runtime.Log("Done serializing and storing");
 
             return true;
         }
@@ -876,21 +870,10 @@ namespace switcheo
         private static BigInteger[] GetVolume(BigInteger bucketNumber, byte[] assetID)
         {
             // Retrieve all volumes from current 24 hr bucket
-            Map<byte[], BigInteger> volumes = Volumes(bucketNumber);
+            var volumes = (Map<byte[], BigInteger>)Storage.Get(Context(), VolumesKey(bucketNumber)).Deserialize();
 
             // Get total foreign and native values for current reference asset
-            BigInteger nativeVolume = 0;
-            BigInteger foreignVolume = 0;
-            if (volumes.HasKey(assetID.Concat(Native)))
-            {
-                nativeVolume = volumes[assetID.Concat(Native)];
-            }
-            if (volumes.HasKey(assetID.Concat(Foreign)))
-            {
-                foreignVolume = volumes[assetID.Concat(Foreign)];
-            }
-
-            return new BigInteger[] { nativeVolume, foreignVolume };
+            return new BigInteger[] { volumes[assetID.Concat(Native)], volumes[assetID.Concat(Foreign)] };
         }
 
         // Helpers
@@ -900,9 +883,9 @@ namespace switcheo
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID);
 
         // Keys
-        private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => originator.Concat(assetID).Concat(Withdraw);
-        private static byte[] VolumesKey(BigInteger bucketNumber) => Native.Concat(bucketNumber.AsByteArray());
+        private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
+        private static byte[] VolumesKey(BigInteger bucketNumber) => "tradeVolumes".AsByteArray().Concat(bucketNumber.AsByteArray());
     }
 }
