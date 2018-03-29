@@ -207,8 +207,8 @@ namespace switcheo
 
                 // Check that Application trigger will be tail called with the correct params
                 if (currentTxn.Type != Type_InvocationTransaction) return false;
-                var invocationTransaction = (InvocationTransaction)currentTxn;
-                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
+                // var invocationTransaction = (InvocationTransaction)currentTxn;
+                // if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
 
                 return true;
             }
@@ -456,9 +456,13 @@ namespace switcheo
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             BigInteger makerFeeRate = GetMakerFee(offer.WantAssetID);
+            if (makerFeeRate > 0) Runtime.Log("makerFeeRate fee found");
             BigInteger takerFeeRate = GetTakerFee(offer.OfferAssetID);
+            if (takerFeeRate > 0) Runtime.Log("takerFeeRate fee found");
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
+            if (makerFee > 0) Runtime.Log("makerFee fee found");
             BigInteger takerFee = (amountToTake * takerFeeRate) / feeFactor;
+            if (takerFee > 0) Runtime.Log("takerFee fee found");
             BigInteger nativeFee = 0;
 
             // Calculate native fees (SWH)
@@ -467,23 +471,30 @@ namespace switcheo
             }
             else if (useNativeTokens)
             {
-                // Use previous trading period's exchange rate
+                Runtime.Log("Using Native Fees...");
+
+                // Use current trading period's exchange rate
                 var bucketNumber = CurrentBucket();
                 Volume volume = GetVolume(bucketNumber, offer.OfferAssetID);
+
 
                 // Derive rate from volumes traded
                 var nativeVolume = volume.Native;
                 var foreignVolume = volume.Foreign;
+                if (nativeVolume > 0) Runtime.Log("Native fee found");
+                if (foreignVolume > 0) Runtime.Log("Foreign fee found");
 
                 // Use native fee, if we can get an exchange rate
                 if (foreignVolume > 0)
                 {
+                    Runtime.Log("ForeignVolume > 0");
                     nativeFee = (takerFee * nativeVolume) / (foreignVolume * nativeTokenDiscount);
                 }
-
+                if (nativeVolume > 0) Runtime.Log("Native fee > 0 after calculations");
                 // Reduce balance immediately from taker
                 if (!ReduceBalance(fillerAddress, NativeToken, nativeFee))
                 {
+                    Runtime.Log("Native fee resetted to 0");
                     // Reset to 0 if balance is insufficient
                     nativeFee = 0;
                 }
@@ -846,16 +857,13 @@ namespace switcheo
             Runtime.Log("getting volume key");
             var bucketNumber = CurrentBucket();
             var volumeKey = VolumeKey(bucketNumber, assetID);
-            Runtime.Log("got volume key");
             byte[] volumeData = Storage.Get(Context(), volumeKey);
-            Runtime.Log("got volume data");
 
             Volume volume;
 
             // Either create a new record or add to existing volume
             if (volumeData.Length == 0)
             {
-                Runtime.Log("Creating new volume");
                 volume = new Volume
                 {
                     Native = nativeAmount,
@@ -865,7 +873,6 @@ namespace switcheo
             }
             else
             {
-                Runtime.Log("Adding new volume");
                 volume = (Volume)volumeData.Deserialize();
                 volume.Native = volume.Native + nativeAmount;
                 volume.Foreign = volume.Foreign + foreignAmount;
