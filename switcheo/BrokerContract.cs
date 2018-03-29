@@ -50,11 +50,6 @@ namespace switcheo
         private static readonly byte[] SystemAsset = { 0x99 };
         private static readonly byte[] NEP5 = { 0x98 };
 
-        // Native Token Flags
-        private static readonly byte[] Native = { 0x70 };
-        private static readonly byte[] Foreign = { 0x71 };
-        private static readonly byte[] Volume = { 0x72 };
-
         // Withdrawal Flags
         private static readonly byte[] Mark = { 0x50 };
         private static readonly byte[] Withdraw = { 0x51 };
@@ -84,6 +79,12 @@ namespace switcheo
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
             public byte[] Nonce;
+        }
+
+        private struct Volume
+        {
+            public BigInteger Native;
+            public BigInteger Foreign;
         }
 
         private static Offer NewOffer(
@@ -844,39 +845,53 @@ namespace switcheo
             // Retrieve all volumes from current 24 hr bucket
             Runtime.Log("getting volume key");
             var bucketNumber = CurrentBucket();
-            var volumeKey = VolumesKey(bucketNumber);
+            var volumeKey = VolumeKey(bucketNumber, assetID);
             Runtime.Log("got volume key");
-            var volumes = (Map<byte[], BigInteger>)Storage.Get(Context(), volumeKey).Deserialize();
-            Runtime.Log("got volume var");
+            byte[] volumeData = Storage.Get(Context(), volumeKey);
+            Runtime.Log("got volume data");
 
-            // Get total foreign and native values for current reference asset
-            Runtime.Log("getting map keys");
-            var nativeKey = assetID.Concat(Native);
-            var foreignKey = assetID.Concat(Foreign);
-            Runtime.Log("got map keys");
+            Volume volume;
 
-            // Add to foreign and native for current reference asset
-            Runtime.Log("adding to map");
-            volumes[nativeKey] += nativeAmount;
-            volumes[foreignKey] += foreignAmount;
-            Runtime.Log("done adding to map");
+            // Either create a new record or add to existing volume
+            if (volumeData.Length == 0)
+            {
+                Runtime.Log("Creating new volume");
+                volume = new Volume
+                {
+                    Native = nativeAmount,
+                    Foreign = foreignAmount
+                };
+                Runtime.Log("Created new volume");
+            }
+            else
+            {
+                Runtime.Log("Adding new volume");
+                volume = (Volume)volumeData.Deserialize();
+                volume.Native += nativeAmount;
+                volume.Foreign += foreignAmount;
+                Runtime.Log("Added new volume");
+            }
 
             // Save to blockchain
             Runtime.Log("Serializing and storing");
-            Storage.Put(Context(), volumeKey, volumes.Serialize());
+            Storage.Put(Context(), volumeKey, volume.Serialize());
             Runtime.Log("Done serializing and storing");
 
             return true;
         }
 
-        // Retrieves the native and foreign volume of a reference assetID
+        // Retrieves the native and foreign volume of a reference assetID in the current 24 hr bucket
         private static BigInteger[] GetVolume(BigInteger bucketNumber, byte[] assetID)
         {
-            // Retrieve all volumes from current 24 hr bucket
-            var volumes = (Map<byte[], BigInteger>)Storage.Get(Context(), VolumesKey(bucketNumber)).Deserialize();
-
-            // Get total foreign and native values for current reference asset
-            return new BigInteger[] { volumes[assetID.Concat(Native)], volumes[assetID.Concat(Foreign)] };
+            byte[] volumeData = Storage.Get(Context(), VolumeKey(bucketNumber, assetID));
+            if (volumeData.Length == 0)
+            {
+                return new BigInteger[] { 0, 0 };
+            }
+            else {
+                var volume = (Volume)volumeData.Deserialize();
+                return new BigInteger[] { volume.Native, volume.Foreign };
+            }
         }
 
         // Helpers
@@ -889,6 +904,6 @@ namespace switcheo
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => originator.Concat(assetID);
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => originator.Concat(assetID).Concat(Withdraw);
         private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
-        private static byte[] VolumesKey(BigInteger bucketNumber) => "tradeVolumes".AsByteArray().Concat(bucketNumber.AsByteArray());
+        private static byte[] VolumeKey(BigInteger bucketNumber, byte[] assetID) => "tradeVolume".AsByteArray().Concat(bucketNumber.AsByteArray()).Concat(assetID);
     }
 }
