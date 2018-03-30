@@ -65,8 +65,9 @@ namespace switcheo
         private static readonly byte[] Empty = { };
         private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed8 (8 bytes)
         private static readonly byte[] Null = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // for fixed width list ptr (32bytes)        
+        private static readonly byte[] NeoAssetID = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
-        private static readonly byte[] WithdrawArgs = new byte[] { 0x00, 0xc1, 0x08 }.Concat("withdraw".AsByteArray()); // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
+        private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
 
         private struct Offer
         {
@@ -208,8 +209,8 @@ namespace switcheo
 
                 // Check that Application trigger will be tail called with the correct params
                 if (currentTxn.Type != Type_InvocationTransaction) return false;
-                // var invocationTransaction = (InvocationTransaction)currentTxn;
-                // if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
+                var invocationTransaction = (InvocationTransaction)currentTxn;
+                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
 
                 return true;
             }
@@ -595,7 +596,15 @@ namespace switcheo
             if (withdrawalStage == Mark)
             {
                 var amount = GetBalance(withdrawingAddr, assetID);
+                if (assetID == NeoAssetID)
+                {
+                    // neo must be rounded down
+                    const ulong neoAssetFactor = 100000000;
+                    amount = amount / neoAssetFactor * neoAssetFactor; 
+                }
+
                 MarkWithdrawal(withdrawingAddr, assetID, amount);
+
                 if (isWithdrawingNEP5)
                 {
                     Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
@@ -612,6 +621,7 @@ namespace switcheo
                         }
                     }
                 }
+
                 Withdrawing(withdrawingAddr, assetID, amount);
                 return true;
             }
@@ -771,10 +781,9 @@ namespace switcheo
             Runtime.Log("Checking Last Mark..");
             if (!VerifyWithdrawal(address, assetID)) return false;
 
-            Runtime.Log("Marking Withdrawal..");
-            var balance = GetBalance(address, assetID);            
-            Storage.Delete(Context(), BalanceKey(address, assetID));
-            Storage.Put(Context(), WithdrawKey(address, assetID), balance);
+            Runtime.Log("Marking Withdrawal..");  
+            if (!ReduceBalance(address, assetID, amount)) return false;
+            Storage.Put(Context(), WithdrawKey(address, assetID), amount);
 
             return true;
         }
