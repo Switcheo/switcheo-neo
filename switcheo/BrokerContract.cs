@@ -34,7 +34,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> Withdrawn; // (address, assetID, amount)
 
         // Broker Settings & Hardcaps
-        private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
+        private static readonly byte[] Owner = "Ae6LkR5TLXVVAE5WSRqAEDEYBx6ChBE6Am".ToScriptHash();
         private static readonly byte[] NativeToken = "AbwJtGDCcwoH2HhDmDq12ZcqFmUpCU3XMp".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
