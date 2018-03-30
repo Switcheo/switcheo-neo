@@ -231,6 +231,7 @@ namespace switcheo
                 if (operation == "getMakerFee") return GetMakerFee(Empty);
                 if (operation == "getTakerFee") return GetTakerFee(Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
+                if (operation == "getExchangeRate2") return new Volume {  Native = 1, Foreign = 2 };
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
 
@@ -514,13 +515,17 @@ namespace switcheo
             if (makerFee > 0) TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
             if (nativeFee == 0) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
+            if (amountToFill == amountToTake) Runtime.Log("Amount to fill equals amount to take");
+
             // Update native token exchange rate
             if (offer.OfferAssetID == NativeToken)
             {
+                Runtime.Log("Offer Asset is native");
                 AddVolume(offer.WantAssetID, amountToFill, amountToTake);
             }
             if (offer.WantAssetID == NativeToken)
             {
+                Runtime.Log("Want Asset is native");
                 AddVolume(offer.OfferAssetID, amountToTake, amountToFill);
             }
 
@@ -874,9 +879,11 @@ namespace switcheo
             else
             {
                 volume = (Volume)volumeData.Deserialize();
+                if (volume.Native == volume.Foreign) Runtime.Log("Its the same!");
                 volume.Native = volume.Native + nativeAmount;
                 volume.Foreign = volume.Foreign + foreignAmount;
-                Runtime.Log("Added new volume");
+                if (volume.Native == volume.Foreign) Runtime.Log("Why is it the same!");
+                Runtime.Log("Added volume");
             }
 
             // Save to blockchain
