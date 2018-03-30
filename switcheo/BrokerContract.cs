@@ -232,7 +232,6 @@ namespace switcheo
                 if (operation == "getMakerFee") return GetMakerFee(Empty);
                 if (operation == "getTakerFee") return GetTakerFee(Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
-                if (operation == "getExchangeRate2") return new Volume { Native = 1, Foreign = 2 }; // TODO: remove
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
 
