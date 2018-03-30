@@ -232,6 +232,7 @@ namespace switcheo
                 if (operation == "getMakerFee") return GetMakerFee(Empty);
                 if (operation == "getTakerFee") return GetTakerFee(Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
+                if (operation == "getExchangeRate2") return new Volume { Native = 1, Foreign = 2 }; // TODO: remove
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
 
@@ -462,13 +463,9 @@ namespace switcheo
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             BigInteger makerFeeRate = GetMakerFee(offer.WantAssetID);
-            if (makerFeeRate > 0) Runtime.Log("makerFeeRate fee found");
             BigInteger takerFeeRate = GetTakerFee(offer.OfferAssetID);
-            if (takerFeeRate > 0) Runtime.Log("takerFeeRate fee found");
             BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
-            if (makerFee > 0) Runtime.Log("makerFee fee found");
             BigInteger takerFee = (amountToTake * takerFeeRate) / feeFactor;
-            if (takerFee > 0) Runtime.Log("takerFee fee found");
             BigInteger nativeFee = 0;
 
             // Calculate native fees (SWH)
@@ -487,20 +484,15 @@ namespace switcheo
                 // Derive rate from volumes traded
                 var nativeVolume = volume.Native;
                 var foreignVolume = volume.Foreign;
-                if (nativeVolume > 0) Runtime.Log("Native fee found");
-                if (foreignVolume > 0) Runtime.Log("Foreign fee found");
 
                 // Use native fee, if we can get an exchange rate
                 if (foreignVolume > 0)
                 {
-                    Runtime.Log("ForeignVolume > 0");
                     nativeFee = (takerFee * nativeVolume) / (foreignVolume * nativeTokenDiscount);
                 }
-                if (nativeVolume > 0) Runtime.Log("Native fee > 0 after calculations");
                 // Reduce balance immediately from taker
                 if (!ReduceBalance(fillerAddress, NativeToken, nativeFee))
                 {
-                    Runtime.Log("Native fee resetted to 0");
                     // Reset to 0 if balance is insufficient
                     nativeFee = 0;
                 }
@@ -591,7 +583,6 @@ namespace switcheo
 
         private static object ProcessWithdrawal()
         {
-            Runtime.Log("withdrawing");
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = WithdrawalStage(currentTxn);
             if (withdrawalStage == Empty) return false;
@@ -616,10 +607,8 @@ namespace switcheo
                     for (ushort index = 0; index < outputs.Length; index++)
                     {
                         sum += (ulong)outputs[index].Value;
-                        Runtime.Log("Output check..");
                         if (sum <= amount)
                         {
-                            Runtime.Log("Reserving...");
                             Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(index)), withdrawingAddr);
                         }
                     }
@@ -676,7 +665,6 @@ namespace switcheo
                 // Check that the sent amount is correct
                 if (sentAmount != amount)
                 {
-                    Runtime.Log("Wrong amount sent");
                     return false;
                 }
 
@@ -860,7 +848,6 @@ namespace switcheo
         private static bool AddVolume(byte[] assetID, BigInteger nativeAmount, BigInteger foreignAmount) 
         {
             // Retrieve all volumes from current 24 hr bucket
-            Runtime.Log("getting volume key");
             var bucketNumber = CurrentBucket();
             var volumeKey = VolumeKey(bucketNumber, assetID);
             byte[] volumeData = Storage.Get(Context(), volumeKey);
@@ -875,18 +862,15 @@ namespace switcheo
                     Native = nativeAmount,
                     Foreign = foreignAmount
                 };
-                Runtime.Log("Created new volume");
             }
             else
             {
                 volume = (Volume)volumeData.Deserialize();
                 volume.Native = volume.Native + nativeAmount;
                 volume.Foreign = volume.Foreign + foreignAmount;
-                Runtime.Log("Added new volume");
             }
 
             // Save to blockchain
-            Runtime.Log("Serializing and storing");
             Storage.Put(Context(), volumeKey, volume.Serialize());
             Runtime.Log("Done serializing and storing");
 
