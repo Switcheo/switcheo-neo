@@ -163,15 +163,16 @@ namespace switcheo
                         if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
                         if (o.AssetId != authorizedAssetID) return false;
                     }
-                    // TODO: should also check outputs.Length for SystemAsset (at most +1 of required) to prevent DOS
 
                     // Check that NEP5 withdrawals don't reserve more utxos than required
                     if (isWithdrawingNEP5)
                     {
                         if (inputs.Length > 1) return false;
-                        if (outputs.Length > 2) return false;
                         if (outputs[0].Value > 1) return false;
                     }
+
+                    // Check that inputs are not wasted (prevent DOS on withdrawals)
+                    if (outputs.Length - inputs.Length > 1) return false;
                 }
                 else if (withdrawalStage == Withdraw)
                 {
@@ -231,7 +232,7 @@ namespace switcheo
                 if (operation == "getMakerFee") return GetMakerFee(Empty);
                 if (operation == "getTakerFee") return GetTakerFee(Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
-                if (operation == "getOffers") return GetOffers((byte[])args[0], (BigInteger)args[1]);
+                if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
 
                 // == Execute ==
@@ -368,14 +369,19 @@ namespace switcheo
             return GetVolume(bucketNumber, assetID);
         }
 
-        private static Offer[] GetOffers(byte[] tradingPair, BigInteger count) // offerAssetID.Concat(wantAssetID)
+        private static Offer[] GetOffers(byte[] tradingPair, byte[] offset) // offerAssetID.Concat(wantAssetID)
         {
-            var result = new Offer[50]; // TODO: dynamic initialization doesn't work?
+            var result = new Offer[50];
 
-            // TODO: allow iteration until start offerHash or offset?
-            var i = 0;
             var it = Storage.Find(Context(), tradingPair);
-            while (it.Next() && i < count && i < 50)
+
+            while (it.Next())
+            {
+                if (it.Value == offset) break;
+            }
+
+            var i = 0;
+            while (it.Next() && i < 50)
             {
                 var value = it.Value;
                 var bytes = value.Deserialize();
@@ -629,7 +635,7 @@ namespace switcheo
                 }
 
                 var amount = GetWithdrawAmount(withdrawingAddr, assetID);
-                if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false; // TODO: if nep-5 withdraw fails for some reason funds can get stuck?
+                if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false;
 
                 Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
                 Withdrawn(withdrawingAddr, assetID, amount);
