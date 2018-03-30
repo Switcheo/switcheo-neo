@@ -306,11 +306,6 @@ namespace switcheo
                     if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return false;
                     Storage.Put(Context(), WhitelistKey((byte[])args[0]), "1");
                 }
-                if (operation == "removeFromWhitelist")
-                {
-                    if (args.Length != 1) return false;
-                    Storage.Delete(Context(), WhitelistKey((byte[])args[0]));
-                }
                 if (operation == "destroyWhitelist")
                 {
                     Storage.Put(Context(), "stateContractWhitelist", Inactive);
