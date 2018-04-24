@@ -230,8 +230,8 @@ namespace switcheo
 
                 // == Getters ==
                 if (operation == "getState") return GetState();
-                if (operation == "getMakerFee") return GetMakerFee(Empty);
-                if (operation == "getTakerFee") return GetTakerFee(Empty);
+                if (operation == "getMakerFee") return GetMakerFee(args.Length == 1 ? (byte[])args[0] : Empty);
+                if (operation == "getTakerFee") return GetTakerFee(args.Length == 1 ? (byte[])args[0] : Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
@@ -294,6 +294,11 @@ namespace switcheo
                 {
                     if (args.Length != 2) return false;
                     return SetTakerFee((BigInteger)args[0], (byte[])args[1]);
+                }
+                if (operation == "resetTakerFee")
+                {
+                    if (args.Length != 2) return false;
+                    return ResetTakerFee((byte[])args[0]);
                 }
                 if (operation == "setFeeAddress")
                 {
@@ -564,6 +569,13 @@ namespace switcheo
             if (fee < 0) return false;
 
             Storage.Put(Context(), "takerFee".AsByteArray().Concat(assetID), fee);
+
+            return true;
+        }
+
+        private static bool ResetTakerFee(byte[] assetID)
+        {
+            Storage.Delete(Context(), "takerFee".AsByteArray().Concat(assetID));
 
             return true;
         }
