@@ -16,7 +16,7 @@ namespace switcheo
         public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> Created; // (address, offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
         [DisplayName("filled")]
-        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger, BigInteger> Filled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, nativeFee)
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger, BigInteger> Filled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, makerFee, makerFeeAssetID, takerFee, takerFeeAssetID)
 
         [DisplayName("failed")]
         public static event Action<byte[], byte[]> Failed; // (address, offerHash)
@@ -39,8 +39,8 @@ namespace switcheo
         [DisplayName("balanceReduced")]
         public static event Action<byte[], byte[], BigInteger> BalanceReduced; // (address, assetID, amount)
 
-        [DisplayName("tradingFrozed")]
-        public static event Action TradingFrozed;
+        [DisplayName("tradingFrozen")]
+        public static event Action TradingFrozen;
 
         [DisplayName("tradingResumed")]
         public static event Action TradingResumed;
@@ -48,7 +48,7 @@ namespace switcheo
         [DisplayName("addedToWhitelist")]
         public static event Action<byte[]> AddedToWhitelist; // (scriptHash)
 
-        [DisplayName("whiteListDestroyed")]
+        [DisplayName("whitelistDestroyed")]
         public static event Action WhitelistDestroyed;
 
         // Broker Settings & Hardcaps
@@ -297,7 +297,7 @@ namespace switcheo
                 if (operation == "freezeTrading")
                 {
                     Storage.Put(Context(), "state", Inactive);
-                    TradingFrozed();
+                    TradingFrozen();
                     return true;
                 }
                 if (operation == "unfreezeTrading")
@@ -815,7 +815,7 @@ namespace switcheo
             var args = new object[] { ExecutionEngine.ExecutingScriptHash, address, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
             bool transferSuccessful = (bool)contract("transfer", args);
-            // TODO: need event?
+
             if (!transferSuccessful)
             {
                 Runtime.Log("Failed to transfer NEP-5 tokens!");
