@@ -1,4 +1,4 @@
-using Neo.SmartContract.Framework;
+﻿using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
 using Neo.SmartContract.Framework.Services.System;
 using System;
@@ -778,7 +778,7 @@ namespace switcheo
             Storage.Delete(Context(), tradingPair.Concat(offerHash));
         }
 
-        private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount, string reason)
+        private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount)
         {
             if (amount < 1)
             {
@@ -792,7 +792,7 @@ namespace switcheo
             Transferred(originator, assetID, amount);
         }
 
-        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount, string reason)
+        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
         {
             if (amount < 1)
             {
@@ -823,7 +823,7 @@ namespace switcheo
             if (!VerifyWithdrawal(address, assetID)) return false;
 
             Runtime.Log("Marking Withdrawal..");  
-            if (!ReduceBalance(address, assetID, amount, "withdrawing")) return false;
+            if (!ReduceBalance(address, assetID, amount)) return false;
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
 
             return true;
