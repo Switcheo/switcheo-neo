@@ -129,7 +129,16 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
-            if (Runtime.Trigger == TriggerType.Verification)
+            if (Runtime.Trigger == TriggerType.VerificationR)
+            {
+                // verify that no invocation (TriggerType.Application) (i.e. no invoke script) will be made if there is an input not from contract
+            }
+            else if (Runtime.Trigger == TriggerType.ApplicationR)
+            {
+                // count inputs
+                // for each, do depositSystemAsset(asset_id, amount)
+            }
+            else if (Runtime.Trigger == TriggerType.Verification)
             {
                 if (GetState() == Pending) return false;
 
@@ -236,8 +245,8 @@ namespace switcheo
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
 
-                // == Execute ==
-                if (operation == "deposit")
+                // == Execute == 
+                if (operation == "deposit") // NEP-5 ONLY
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 3) return false;
@@ -746,7 +755,7 @@ namespace switcheo
             Storage.Delete(Context(), tradingPair.Concat(offerHash));
         }
 
-        private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount)
+        private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount, string reason)
         {
             if (amount < 1)
             {
@@ -757,9 +766,10 @@ namespace switcheo
             byte[] key = BalanceKey(originator, assetID);
             BigInteger currentBalance = Storage.Get(Context(), key).AsBigInteger();
             Storage.Put(Context(), key, currentBalance + amount);
+
         }
 
-        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
+        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount, string reason)
         {
             if (amount < 1)
             {
@@ -789,7 +799,7 @@ namespace switcheo
             if (!VerifyWithdrawal(address, assetID)) return false;
 
             Runtime.Log("Marking Withdrawal..");  
-            if (!ReduceBalance(address, assetID, amount)) return false;
+            if (!ReduceBalance(address, assetID, amount, "withdrawing")) return false;
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
 
             return true;
