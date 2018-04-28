@@ -149,12 +149,11 @@ namespace switcheo
         {
             if (Runtime.Trigger == TriggerType.VerificationR)
             {
-                // verify that no invocation (TriggerType.Application) (i.e. no invoke script) will be made if there is an input not from contract
+                return operation == "receiving" ? Receiving() : false;
             }
             else if (Runtime.Trigger == TriggerType.ApplicationR)
             {
-                // count inputs
-                // for each, do depositSystemAsset(asset_id, amount)
+                return operation == "received" ? Received() : Empty;
             }
             else if (Runtime.Trigger == TriggerType.Verification)
             {
@@ -269,8 +268,7 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 3) return false;
-                    if (!VerifySentAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
-                    TransferAssetTo((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                    if (!VerifyAndSendAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
                     return true;
                 }
                 if (operation == "makeOffer")
@@ -351,6 +349,56 @@ namespace switcheo
             }
 
             return true;
+        }
+
+        public static bool Receiving() {
+            // TODO: verify that no invocation (TriggerType.Application) (i.e. no invoke script) will be made if there is an input not from contract
+
+            // TODO: Check the current transaction for the system assets
+            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            var inputs = currentTxn.GetInputs();
+
+            foreach (var i in inputs)
+            {
+                
+                //if ( )
+            //    if (i.GetType() == GasAssetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+            //    {
+            //        sentGasAmount += (ulong)o.Value;
+            //    }
+            //    else if (i.AssetId == NeoAssetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+            //    {
+            //        sentNeoAmount += (ulong)o.Value;
+            //    }
+            }
+            return true;
+        }
+
+        // TODO: Is this correct?
+        public static byte[] Received()
+        {
+            // System Assets Received
+
+            // Check the current transaction for the system assets
+            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            var outputs = currentTxn.GetOutputs();
+            ulong sentGasAmount = 0;
+            ulong sentNeoAmount = 0;
+            foreach (var o in outputs)
+            {
+                if (o.AssetId == GasAssetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                {
+                    sentGasAmount += (ulong)o.Value;
+                }
+                else if (o.AssetId == NeoAssetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash) {
+                    sentNeoAmount += (ulong)o.Value;
+                }
+            }
+            byte[] addressTodeposit = ExecutionEngine.CallingScriptHash; // TODO: Is this correct?
+            if (sentGasAmount > 0) IncreaseBalance(addressTodeposit, GasAssetID, sentGasAmount, "deposit");
+            if (sentNeoAmount > 0) IncreaseBalance(addressTodeposit, NeoAssetID, sentNeoAmount, "deposit");
+
+            return Empty;
         }
 
         private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
@@ -448,7 +496,7 @@ namespace switcheo
                 (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
 
             // Reduce available balance for the offered asset and amount
-            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount)) return false;
+            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, "make")) return false;
 
             // Add the offer to storage
             StoreOffer(tradingPair, offerHash, offer);
@@ -493,8 +541,8 @@ namespace switcheo
                 return true;
             }
 
-            // Reduce available balance for the filled asset and amount
-            if (amountToFill > 0 && !ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill)) return false;
+            // Reduce available balance for the filler's asset
+            if (amountToFill > 0 && !ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, "filling")) return false;
 
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
@@ -527,7 +575,7 @@ namespace switcheo
                     nativeFee = (takerFee * nativeVolume) / (foreignVolume * nativeTokenDiscount);
                 }
                 // Reduce balance immediately from taker
-                if (!ReduceBalance(fillerAddress, NativeToken, nativeFee))
+                if (!ReduceBalance(fillerAddress, NativeToken, nativeFee, "takerfee"))
                 {
                     // Reset to 0 if balance is insufficient
                     nativeFee = 0;
@@ -536,15 +584,15 @@ namespace switcheo
 
             // Move asset to the taker balance and notify clients
             var takerAmount = amountToTake - (nativeFee > 0 ? 0 : takerFee);
-            TransferAssetTo(fillerAddress, offer.OfferAssetID, takerAmount);
+            IncreaseBalance(fillerAddress, offer.OfferAssetID, takerAmount, "takerFilled");
 
             // Move asset to the maker balance and notify clients
             var makerAmount = amountToFill - makerFee;
-            TransferAssetTo(offer.MakerAddress, offer.WantAssetID, makerAmount);
+            IncreaseBalance(offer.MakerAddress, offer.WantAssetID, makerAmount, "makerFilled");
 
             // Move fees
-            if (makerFee > 0) TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
-            if (nativeFee == 0) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
+            if (makerFee > 0) IncreaseBalance(feeAddress, offer.WantAssetID, makerFee, "receivedMakerFees");
+            if (nativeFee == 0) IncreaseBalance(feeAddress, offer.OfferAssetID, takerFee, "receivedTakerFees");
 
             // Update native token volumes that will be used as exchange rate
             if (offer.OfferAssetID == NativeToken)
@@ -577,7 +625,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             // Move funds to withdrawal address
-            TransferAssetTo(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount);
+            IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, "cancel");
 
             // Remove offer
             RemoveOffer(tradingPair, offerHash);
@@ -695,52 +743,17 @@ namespace switcheo
             return true;
         }
 
-        private static bool VerifySentAmount(byte[] originator, byte[] assetID, BigInteger amount)
+        private static bool VerifyAndSendAmount(byte[] originator, byte[] assetID, BigInteger amount)
         {
-            // Verify that the offer really has the indicated assets available
-            if (assetID.Length == 32)
-            {
-                // Check the current transaction for the system assets
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                var outputs = currentTxn.GetOutputs();
-                ulong sentAmount = 0;
-                foreach (var o in outputs)
-                {
-                    if (o.AssetId == assetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
-                    {
-                        sentAmount += (ulong)o.Value;
-                    }
-                }
-
-                // Check that the sent amount is correct
-                if (sentAmount != amount)
-                {
-                    return false;
-                }
-
-                // Check that there is no double deposit
-                var alreadyVerified = Storage.Get(Context(), currentTxn.Hash.Concat(assetID)).Length > 0;
-                if (alreadyVerified) return false;
-
-                // Update the consumed amount for this txn
-                Storage.Put(Context(), currentTxn.Hash.Concat(assetID), 1);
-
-                // TODO: how to cleanup?
-                return true;
-            }
-            else if (assetID.Length == 20)
-            {
-                // Just transfer immediately or fail as this is the last step in verification
-                if (!VerifyContract(assetID)) return false;
-                var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
-                var Contract = (NEP5Contract)assetID.ToDelegate();
-                var transferSuccessful = (bool)Contract("transfer", args);
-                // TODO: need event?
-                return transferSuccessful;
-            }
-
-            // Unknown asset category
-            return false;
+            if (!VerifyContract(assetID)) return false;
+            // Must be NEP5 assetID length
+            if (assetID.Length != 20) return false;
+            // Just transfer immediately
+            var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
+            var Contract = (NEP5Contract)assetID.ToDelegate();
+            var transferSuccessful = (bool)Contract("transfer", args);
+            if (transferSuccessful) IncreaseBalance(originator, assetID, amount, "deposit");
+            return transferSuccessful;
         }
 
         private static bool VerifyContract(byte[] assetID)
@@ -781,7 +794,7 @@ namespace switcheo
             Storage.Delete(Context(), tradingPair.Concat(offerHash));
         }
 
-        private static void TransferAssetTo(byte[] originator, byte[] assetID, BigInteger amount)
+        private static void IncreaseBalance(byte[] originator, byte[] assetID, BigInteger amount, string reason)
         {
             if (amount < 1)
             {
@@ -795,7 +808,7 @@ namespace switcheo
             Transferred(originator, assetID, amount);
         }
 
-        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount)
+        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount, string reason)
         {
             if (amount < 1)
             {
@@ -826,7 +839,7 @@ namespace switcheo
             if (!VerifyWithdrawal(address, assetID)) return false;
 
             Runtime.Log("Marking Withdrawal..");  
-            if (!ReduceBalance(address, assetID, amount)) return false;
+            if (!ReduceBalance(address, assetID, amount, "withdrawal")) return false;
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
 
             return true;
