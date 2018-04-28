@@ -19,7 +19,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger, BigInteger> Filled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, makerFee, makerFeeAssetID, takerFee, takerFeeAssetID)
 
         [DisplayName("failed")]
-        public static event Action<byte[], byte[]> Failed; // (address, offerHash)
+        public static event Action<byte[], byte[], BigInteger, Boolean, String> Failed; // (address, offerHash, amountToFill, useNativeTokens, reason)
 
         [DisplayName("cancelled")]
         public static event Action<byte[], byte[]> Cancelled; // (address, offerHash)
@@ -458,6 +458,8 @@ namespace switcheo
             return true;
         }
 
+        // Fills an offer by filling the amount the offerer wants
+        // => amountToFill's asset type = offer's wantAssetID
         private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToFill, bool useNativeTokens)
         {
             // Check that transaction is signed by the filler
@@ -468,25 +470,26 @@ namespace switcheo
             if (offer.MakerAddress == Empty)
             {
                 // Notify clients of failure
-                Failed(fillerAddress, offerHash);
+                Failed(fillerAddress, offerHash, amountToFill, useNativeTokens, "Empty Offer");
                 return true;
             }
 
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress) return false;
 
-            // Calculate max amount that can be offered & filled
-            BigInteger amountToTake = (offer.OfferAmount * amountToFill) / offer.WantAmount;
+
+            // Calculate the max amount that can be offered & filled based on current available amount
+            BigInteger amountToTake = (offer.OfferAmount * amountToFill) / offer.WantAmount; // amountToTake's asset type = offerAssetID (taker is taking what is offered)
             if (amountToTake > offer.AvailableAmount)
             {
                 amountToTake = offer.AvailableAmount;
                 amountToFill = (amountToTake * offer.WantAmount) / offer.OfferAmount;
             }
-            // Check that the amount that will be given is at least 1
+            // Check that the amount that will be taken is at least 1
             if (amountToTake <= 0)
             {
                 // Notify clients of failure
-                Failed(fillerAddress, offerHash);
+                Failed(fillerAddress, offerHash, amountToFill, useNativeTokens, "Taking less than 1");
                 return true;
             }
 
@@ -543,14 +546,14 @@ namespace switcheo
             if (makerFee > 0) TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
             if (nativeFee == 0) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
-            // Update native token exchange rate
+            // Update native token volumes that will be used as exchange rate
             if (offer.OfferAssetID == NativeToken)
             {
-                AddVolume(offer.WantAssetID, amountToFill, amountToTake);
+                AddVolume(offer.WantAssetID, amountToTake, amountToFill);
             }
             if (offer.WantAssetID == NativeToken)
             {
-                AddVolume(offer.OfferAssetID, amountToTake, amountToFill);
+                AddVolume(offer.OfferAssetID, amountToFill, amountToTake);
             }
 
             // Update available amount
