@@ -766,14 +766,48 @@ namespace switcheo
             // Check whitelist
             if (!VerifyContract(assetID)) return false;
 
-            // Must be NEP5 assetID length
-            if (assetID.Length != 20) return false;
-            // Just transfer immediately
-            var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
-            var Contract = (NEP5Contract)assetID.ToDelegate();
-            var transferSuccessful = (bool)Contract("transfer", args);
-            if (transferSuccessful) IncreaseBalance(originator, assetID, amount, ReasonDeposit);
-            return transferSuccessful;
+            // Verify that the offer really has the indicated assets available
+            if (assetID.Length == 32)
+            {
+                // Check the current transaction for the system assets
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                var outputs = currentTxn.GetOutputs();
+                ulong sentAmount = 0;
+                foreach (var o in outputs)
+                {
+                    if (o.AssetId == assetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                    {
+                        sentAmount += (ulong)o.Value;
+                    }
+                }
+
+                // Check that the sent amount is correct
+                if (sentAmount != amount)
+                {
+                    return false;
+                }
+
+                // Check that there is no double deposit
+                var alreadyVerified = Storage.Get(Context(), currentTxn.Hash.Concat(assetID)).Length > 0;
+                if (alreadyVerified) return false;
+
+                // Update the consumed amount for this txn
+                Storage.Put(Context(), currentTxn.Hash.Concat(assetID), 1);
+
+                // TODO: how to cleanup?
+                return true;
+            }
+            else if (assetID.Length == 20)
+            {
+                // Just transfer immediately
+                var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
+                var Contract = (NEP5Contract)assetID.ToDelegate();
+                var transferSuccessful = (bool)Contract("transfer", args);
+                if (transferSuccessful) IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+                return transferSuccessful;
+            }
+            // Unknown asset category
+            return false;
         }
 
         // Checks if there are any system assets received from this contract in this transaction
