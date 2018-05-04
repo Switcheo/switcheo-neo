@@ -25,7 +25,7 @@ namespace switcheo
         public static event Action<byte[], byte[]> EmitCancelled; // (address, offerHash)
 
         [DisplayName("transferred")]
-        public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitTransferred; // (address, assetID, amount, reason)
+        public static event Action<byte[], byte[], BigInteger, byte[]> EmitTransferred; // (address, assetID, amount, reason)
 
         [DisplayName("withdrawing")]
         public static event Action<byte[], byte[], BigInteger> EmitWithdrawing; // (address, assetID, amount)
@@ -284,7 +284,7 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 3) return false;
-                    if (!VerifyAndSendAmount((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
+                    if (!Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
                     return true;
                 }
                 if (operation == "makeOffer")
@@ -381,17 +381,6 @@ namespace switcheo
             // Make sure there is a deposit call with no arguments
             if (invocationTransaction.Script != DepositArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
             return true;
-        }
-
-        // Checks if there are any system assets received from this contract in this transaction
-        private static bool IsReceivingFromSelf(Transaction transaction)
-        {
-            var outputs = transaction.GetReferences();
-            foreach (var o in outputs)
-            {
-                if (o.ScriptHash == ExecutionEngine.ExecutingScriptHash) return true;
-            }
-            return false;
         }
 
         // Called by ApplicationR
@@ -772,9 +761,11 @@ namespace switcheo
             return true;
         }
 
-        private static bool VerifyAndSendAmount(byte[] originator, byte[] assetID, BigInteger amount)
+        private static bool Deposit(byte[] originator, byte[] assetID, BigInteger amount)
         {
+            // Check whitelist
             if (!VerifyContract(assetID)) return false;
+
             // Must be NEP5 assetID length
             if (assetID.Length != 20) return false;
             // Just transfer immediately
@@ -783,6 +774,17 @@ namespace switcheo
             var transferSuccessful = (bool)Contract("transfer", args);
             if (transferSuccessful) IncreaseBalance(originator, assetID, amount, ReasonDeposit);
             return transferSuccessful;
+        }
+
+        // Checks if there are any system assets received from this contract in this transaction
+        private static bool IsReceivingFromSelf(Transaction transaction)
+        {
+            var inputs = transaction.GetReferences();
+            foreach (var i in inputs)
+            {
+                if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return true;
+            }
+            return false;
         }
 
         private static bool VerifyContract(byte[] assetID)
@@ -857,7 +859,7 @@ namespace switcheo
 
             if (newBalance > 0) Storage.Put(Context(), key, newBalance);
             else Storage.Delete(Context(), key);
-            // TODO: emit event in v2 EmitBalanceChanged(address, assetID, amount, reason)
+            // TODO: emit event in v2 EmitBalanceChanged(address, assetID, amount, reason);
 
             return true;
         }
