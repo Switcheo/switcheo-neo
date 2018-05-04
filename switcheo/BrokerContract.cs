@@ -702,35 +702,32 @@ namespace switcheo
             if (withdrawalStage == Mark)
             {
                 var amount = GetBalance(withdrawingAddr, assetID);
-                if (assetID == NeoAssetID)
-                {
-                    // neo must be rounded down
-                    const ulong neoAssetFactor = 100000000;
-                    amount = amount / neoAssetFactor * neoAssetFactor; 
-                }
-
-                MarkWithdrawal(withdrawingAddr, assetID, amount);
 
                 if (isWithdrawingNEP5)
                 {
-                    Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
+                    if (amount > 0) Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
                 }
                 else
                 {
+                    if (assetID == NeoAssetID)
+                    {
+                        // neo must be rounded down
+                        const ulong neoAssetFactor = 100000000;
+                        amount = amount / neoAssetFactor * neoAssetFactor;
+                    }
                     ulong sum = 0;
                     for (ushort index = 0; index < outputs.Length; index++)
                     {
-                        sum += (ulong)outputs[index].Value;
-                        if (sum <= amount)
-                        {
-                            Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(index)), withdrawingAddr);
-                        }
+                        var value = (ulong)outputs[index].Value;
+                        if (sum + value > amount) break;
+
+                        Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(index)), withdrawingAddr);
+                        sum += value;
                     }
                     amount = sum;
                 }
 
-                EmitWithdrawing(withdrawingAddr, assetID, amount);
-                return true;
+                return MarkWithdrawal(withdrawingAddr, assetID, amount);
             }
             else if (withdrawalStage == Withdraw)
             {
@@ -861,11 +858,7 @@ namespace switcheo
 
         private static void IncreaseBalance(byte[] originator, byte[] assetID, BigInteger amount, byte[] reason)
         {
-            if (amount < 1)
-            {
-                Runtime.Log("Amount to transfer is less than 1!");
-                return;
-            }
+            if (amount < 1) return;
 
             byte[] key = BalanceKey(originator, assetID);
             BigInteger currentBalance = Storage.Get(Context(), key).AsBigInteger();
@@ -875,21 +868,13 @@ namespace switcheo
 
         private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount, byte[] reason)
         {
-            if (amount < 1)
-            {
-                Runtime.Log("Amount to reduce is less than 1!");
-                return false;
-            }
+            if (amount < 1) return false;
 
             var key = BalanceKey(address, assetID);
             var currentBalance = Storage.Get(Context(), key).AsBigInteger();
             var newBalance = currentBalance - amount;
 
-            if (newBalance < 0)
-            {
-                Runtime.Log("Not enough balance!");
-                return false;
-            }
+            if (newBalance < 0) return false;
 
             if (newBalance > 0) Storage.Put(Context(), key, newBalance);
             else Storage.Delete(Context(), key);
@@ -900,12 +885,13 @@ namespace switcheo
 
         private static bool MarkWithdrawal(byte[] address, byte[] assetID, BigInteger amount)
         {
-            Runtime.Log("Checking Last Mark..");
+            if (amount < 1) return false;
             if (!VerifyWithdrawal(address, assetID)) return false;
 
-            Runtime.Log("Marking Withdrawal..");  
             if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal)) return false;
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
+
+            EmitWithdrawing(address, assetID, amount);
 
             return true;
         }
