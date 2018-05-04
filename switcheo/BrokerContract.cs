@@ -86,22 +86,21 @@ namespace switcheo
         private static readonly byte[] DepositArgs = { 0x00, 0xc1, 0x00 }; // PUSH0, PACK, PUSHBYTES0
 
         // Reason Code for balance changes
-        private static readonly byte[] ReasonDeposit = { 0, 1, 1 }; // Balance increased due to deposit
-        private static readonly byte[] ReasonMake = { 0, 1, 2 }; // Balance reduced due to maker making
-        private static readonly byte[] ReasonTakerFill = { 0, 1, 3 }; // Balance reduced due to taker filling maker's offered asset
-        private static readonly byte[] ReasonTakerFee = { 0, 1, 4 }; // Balance reduced due to taker fees
-        private static readonly byte[] ReasonMakerFee = { 0, 1, 5 }; // Balance reduced due to maker fees
-        private static readonly byte[] ReasonTakerReceive = { 0, 1, 6 }; // Balance increased due to taker receiving his cut in the trade
-        private static readonly byte[] ReasonMakerReceive = { 0, 1, 7 }; // Balance increased due to maker receiving his cut in the trade
-        private static readonly byte[] ReasonContractMakerFee = { 0, 1, 8 }; // Balance increased on fee address due to contract receiving maker fee
-        private static readonly byte[] ReasonContractTakerFee = { 0, 1, 9 }; // Balance increased on fee address due to contract receiving taker fee
-        private static readonly byte[] ReasonCancel = { 0, 1, 10 }; // Balance increased due to cancelling offer
-        private static readonly byte[] ReasonPrepareWithdrawal = { 0, 1, 11 }; // Balance reduced due to preparing for asset withdrawal
+        private static readonly byte[] ReasonDeposit = { 0x01 }; // Balance increased due to deposit
+        private static readonly byte[] ReasonMake = { 0x02 }; // Balance reduced due to maker making
+        private static readonly byte[] ReasonTakerFill = { 0x03 }; // Balance reduced due to taker filling maker's offered asset
+        private static readonly byte[] ReasonTakerFee = { 0x04 }; // Balance reduced due to taker fees
+        private static readonly byte[] ReasonMakerFee = { 0x05 }; // Balance reduced due to maker fees
+        private static readonly byte[] ReasonTakerReceive = { 0x06 }; // Balance increased due to taker receiving his cut in the trade
+        private static readonly byte[] ReasonMakerReceive = { 0x07 }; // Balance increased due to maker receiving his cut in the trade
+        private static readonly byte[] ReasonContractMakerFee = { 0x08 }; // Balance increased on fee address due to contract receiving maker fee
+        private static readonly byte[] ReasonContractTakerFee = { 0x09 }; // Balance increased on fee address due to contract receiving taker fee
+        private static readonly byte[] ReasonCancel = { 0x0a }; // Balance increased due to cancelling offer
+        private static readonly byte[] ReasonPrepareWithdrawal = { 0x0b }; // Balance reduced due to preparing for asset withdrawal
 
         // Reason Code for fill failures
-        private static readonly byte[] ReasonEmptyOffer = { 0, 2, 1 }; // Empty Offer when trying to fill
-        private static readonly byte[] ReasonTakingLessThanOne = { 0, 2, 2 }; // Taking less than 1 asset when trying to fill
-
+        private static readonly byte[] ReasonEmptyOffer = { 0x21 }; // Empty Offer when trying to fill
+        private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 asset when trying to fill
 
         private struct Offer
         {
@@ -609,7 +608,7 @@ namespace switcheo
 
             // Move fees
             if (makerFee > 0) IncreaseBalance(feeAddress, offer.WantAssetID, makerFee, ReasonContractMakerFee);
-            if (nativeFee == 0) IncreaseBalance(feeAddress, offer.OfferAssetID, takerFee, ReasonContractTakerFee); // TODO: Why is the logic like this? Where does the nativeFee get burned?
+            if (nativeFee == 0) IncreaseBalance(feeAddress, offer.OfferAssetID, takerFee, ReasonContractTakerFee);
 
             // Update native token volumes that will be used as exchange rate
             if (offer.OfferAssetID == NativeToken)
