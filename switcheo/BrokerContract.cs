@@ -19,7 +19,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, makerFee, makerFeeAssetID, takerFee, takerFeeAssetID)
 
         [DisplayName("failed")]
-        public static event Action<byte[], byte[], BigInteger, Boolean, byte[]> EmitFailed; // (address, offerHash, amountToFill, useNativeTokens, reason)
+        public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToFill, useNativeTokens, reason)
 
         [DisplayName("cancelled")]
         public static event Action<byte[], byte[]> EmitCancelled; // (address, offerHash)
@@ -101,6 +101,10 @@ namespace switcheo
         // Reason Code for fill failures
         private static readonly byte[] ReasonEmptyOffer = { 0x21 }; // Empty Offer when trying to fill
         private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 asset when trying to fill
+
+        // True or false
+        private static readonly byte[] True = { 0x01 };
+        private static readonly byte[] False = { 0x00 };
 
         private struct Offer
         {
@@ -534,7 +538,7 @@ namespace switcheo
             if (offer.MakerAddress == Empty)
             {
                 // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens, ReasonEmptyOffer);
+                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonEmptyOffer);
                 return true;
             }
 
@@ -553,7 +557,7 @@ namespace switcheo
             if (amountToTake <= 0)
             {
                 // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens, ReasonTakingLessThanOne);
+                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonTakingLessThanOne);
                 return true;
             }
 
