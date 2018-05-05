@@ -16,7 +16,7 @@ namespace switcheo
         public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> EmitCreated; // (address, offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
         [DisplayName("filled")]
-        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, makerFee, makerFeeAssetID, takerFee, takerFeeAssetID)
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, makerFee, makerFeeAssetID, takerFee, takerFeeAssetID)
 
         [DisplayName("failed")]
         public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToFill, useNativeTokens, reason)
@@ -168,7 +168,8 @@ namespace switcheo
         {
             if (Runtime.Trigger == TriggerType.VerificationR)
             {
-                return operation == "receiving" ? Receiving() : false;
+                if (operation == "receiving") return Receiving();
+                return false;
             }
             else if (Runtime.Trigger == TriggerType.ApplicationR)
             {
@@ -631,7 +632,7 @@ namespace switcheo
             StoreOffer(tradingPair, offerHash, offer);
 
             // Notify clients
-            EmitFilled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount, amountToTake, nativeFee);
+            EmitFilled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount, amountToTake);
             return true;
         }
 
