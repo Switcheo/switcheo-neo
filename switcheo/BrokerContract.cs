@@ -16,7 +16,10 @@ namespace switcheo
         public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> EmitCreated; // (address, offerHash, offerAssetID, offerAmount, wantAssetID, wantAmount)
 
         [DisplayName("filled")]
-        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake, takerFee)
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake)
+
+        [DisplayName("fees")]
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
 
         [DisplayName("failed")]
         public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToFill, useNativeTokens, reason)
@@ -585,7 +588,6 @@ namespace switcheo
                 var bucketNumber = CurrentBucket();
                 Volume volume = GetVolume(bucketNumber, offer.OfferAssetID);
 
-
                 // Derive rate from volumes traded
                 var nativeVolume = volume.Native;
                 var foreignVolume = volume.Foreign;
@@ -633,6 +635,7 @@ namespace switcheo
 
             // Notify clients
             EmitFilled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount, amountToTake);
+            EmitFeesSent(feeAddress, offerHash, offer.OfferAssetID, makerFee, offer.WantAssetID, takerFee);
             return true;
         }
 
