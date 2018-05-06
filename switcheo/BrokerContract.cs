@@ -19,7 +19,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake)
 
         [DisplayName("fees")]
-        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
+        public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
 
         [DisplayName("failed")]
         public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToFill, useNativeTokens, reason)
