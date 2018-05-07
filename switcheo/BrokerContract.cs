@@ -343,10 +343,7 @@ namespace switcheo
                 if (operation == "setGasFaucetAddress")
                 {
                     if (args.Length != 1) return false;
-                    var address = (byte[])args[0];
-                    Storage.Put(Context(), "gasFaucetAddress", address);
-                    EmitGasFaucetSet(address);
-                    return true;
+                    return SetGasFaucetAddress((byte[])args[0]);;
                 }
                 if (operation == "setMakerFee")
                 {
@@ -443,6 +440,7 @@ namespace switcheo
             if (!SetMakerFee(makerFee, Empty)) return false;
             if (!SetTakerFee(takerFee, Empty)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
+            if (!SetGasFaucetAddress(gasFaucetAddress)) return false;
 
             Storage.Put(Context(), "state", Active);
 
@@ -707,6 +705,14 @@ namespace switcheo
             if (feeAddress.Length != 20) return false;
             Storage.Put(Context(), "feeAddress", feeAddress);
 
+            return true;
+        }
+
+        private static bool SetGasFaucetAddress(byte[] gasFaucetAddress)
+        {
+            if (gasFaucetAddress.Length != 20) return false;
+            Storage.Put(Context(), "gasFaucetAddress", gasFaucetAddress);
+            EmitGasFaucetSet(gasFaucetAddress);
             return true;
         }
 
