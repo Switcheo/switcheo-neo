@@ -39,6 +39,9 @@ namespace switcheo
         [DisplayName("volumeAdded")]
         public static event Action<byte[], BigInteger, BigInteger> EmitVolumeAdded; // (assetID, nativeAmount, foreignAmount)
 
+        [DisplayName("gasFaucetSet")]
+        public static event Action<byte[]> EmitGasFaucetSet; // (address)
+
         [DisplayName("tradingFrozen")]
         public static event Action EmitTradingFrozen;
 
@@ -56,7 +59,7 @@ namespace switcheo
         private static readonly byte[] NativeToken = "AbwJtGDCcwoH2HhDmDq12ZcqFmUpCU3XMp".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
-        private const int bucketDuration = 82800; // 82800secs = 23hrs
+        private const int bucketDuration = 86400; // 86400secs = 24hrs
         private const int nativeTokenDiscount = 2; // 1/2 => 50%
 
         // Contract States
@@ -194,7 +197,7 @@ namespace switcheo
                 if (withdrawalStage == Mark)
                 {
                     // Check that txn is signed
-                    if (!Runtime.CheckWitness(withdrawingAddr)) return false;
+                    if (!(Runtime.CheckWitness(withdrawingAddr) || Runtime.CheckWitness(GetGasFaucetAddress()))) return false;
 
                     // Check that withdrawal is possible
                     if (!VerifyWithdrawal(withdrawingAddr, assetID)) return false;
@@ -273,8 +276,8 @@ namespace switcheo
                         Runtime.Log("Owner signature verification failed!");
                         return false;
                     }
-                    if (args.Length != 3) return false;
-                    return Initialize((BigInteger)args[0], (BigInteger)args[1], (byte[])args[2]);
+                    if (args.Length != 4) return false;
+                    return Initialize((BigInteger)args[0], (BigInteger)args[1], (byte[])args[2], (byte[])args[3]);
                 }
 
                 // == Getters ==
@@ -285,9 +288,10 @@ namespace switcheo
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getOffer") return GetOffer((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
+                if (operation == "getGasFaucetAddress") return GetGasFaucetAddress();
 
                 // == Execute == 
-                if (operation == "deposit") // NEP-5 ONLY
+                if (operation == "deposit") // NEP-5 ONLY + backwards compatibility before nep-7
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 3) return false;
@@ -334,6 +338,14 @@ namespace switcheo
                 {
                     Storage.Put(Context(), "state", Active);
                     EmitTradingResumed();
+                    return true;
+                }
+                if (operation == "setGasFaucetAddress")
+                {
+                    if (args.Length != 1) return false;
+                    var address = (byte[])args[0];
+                    Storage.Put(Context(), "gasFaucetAddress", address);
+                    EmitGasFaucetSet(address);
                     return true;
                 }
                 if (operation == "setMakerFee")
@@ -425,7 +437,7 @@ namespace switcheo
             return Empty;
         }
 
-        private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress)
+        private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress, byte[] gasFaucetAddress)
         {
             if (GetState() != Pending) return false;
             if (!SetMakerFee(makerFee, Empty)) return false;
@@ -462,6 +474,11 @@ namespace switcheo
         private static BigInteger GetBalance(byte[] originator, byte[] assetID)
         {
             return Storage.Get(Context(), BalanceKey(originator, assetID)).AsBigInteger();
+        }
+
+        private static byte[] GetGasFaucetAddress()
+        {
+            return Storage.Get(Context(), "gasFaucetAddress");
         }
 
         private static BigInteger GetWithdrawAmount(byte[] originator, byte[] assetID)
@@ -548,7 +565,6 @@ namespace switcheo
 
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress) return false;
-
 
             // Calculate the max amount that can be offered & filled based on current available amount
             BigInteger amountToTake = (offer.OfferAmount * amountToFill) / offer.WantAmount; // amountToTake's asset type = offerAssetID (taker is taking what is offered)
@@ -645,8 +661,8 @@ namespace switcheo
             Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty) return false;
 
-            // Check that transaction is signed by the canceller
-            if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
+            // Check that transaction is signed by the canceller or Check that transaction is signed by gas faucet if trading is frozen 
+            if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && Runtime.CheckWitness(GetGasFaucetAddress())))) return false;
 
             // Move funds to withdrawal address
             IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
@@ -1013,6 +1029,11 @@ namespace switcheo
             else {
                 return (Volume)volumeData.Deserialize();
             }
+        }
+
+        private static bool IsTradingFrozen()
+        {
+            return (Storage.Get(Context(), "stateContractWhitelist") == Inactive);
         }
 
         // Helpers
