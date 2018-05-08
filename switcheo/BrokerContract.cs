@@ -409,7 +409,7 @@ namespace switcheo
 
             Runtime.Log("Received");
             // Check for double deposits
-            if (DepositKey(currentTxn).Length > 1) return false;
+            if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 1) return false;
 
             Runtime.Log("No double deposits");
             // if there is input from the contract it is a Withdrawal and we won't deposit anything
