@@ -400,19 +400,23 @@ namespace switcheo
         }
 
         // Called by ApplicationR
-        public static byte[] Received()
+        public static bool Received()
         {
             // Check the current transaction for the system assets
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var outputs = currentTxn.GetOutputs();
 
+            // Check for double deposits
+            if (DepositKey(currentTxn).Length > 1) return false;
+
             // if there is input from the contract it is a Withdrawal and we won't deposit anything
-            if (IsReceivingFromSelf(currentTxn)) return Empty;
+            if (IsReceivingFromSelf(currentTxn)) return false;
 
             // Only deposit those assets not from contract
             ulong sentGasAmount = 0;
             ulong sentNeoAmount = 0;
 
+            // TODO: use a map
             foreach (var o in outputs)
             {
                 if (o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
@@ -431,7 +435,7 @@ namespace switcheo
             if (sentGasAmount > 0) IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
             if (sentNeoAmount > 0) IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
 
-            return Empty;
+            return true;
         }
 
         private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress, byte[] gasFaucetAddress)
@@ -789,42 +793,23 @@ namespace switcheo
 
         private static bool Deposit(byte[] originator, byte[] assetID, BigInteger amount)
         {
-            // Check whitelist
-            if (!VerifyContract(assetID)) return false;
-
             // Verify that the offer really has the indicated assets available
             if (assetID.Length == 32)
             {
-                // Check the current transaction for the system assets
+                // Accept all system assets
+                var received = Received();
+
+                // Mark deposit
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                var outputs = currentTxn.GetOutputs();
-                ulong sentAmount = 0;
-                foreach (var o in outputs)
-                {
-                    if (o.AssetId == assetID && o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
-                    {
-                        sentAmount += (ulong)o.Value;
-                    }
-                }
+                Storage.Put(Context(), DepositKey(currentTxn), 1);
 
-                // Check that the sent amount is correct
-                if (sentAmount != amount)
-                {
-                    return false;
-                }
-
-                // Check that there is no double deposit
-                var alreadyVerified = Storage.Get(Context(), currentTxn.Hash.Concat(assetID)).Length > 0;
-                if (alreadyVerified) return false;
-
-                // Update the consumed amount for this txn
-                Storage.Put(Context(), currentTxn.Hash.Concat(assetID), 1);
-
-                // TODO: how to cleanup?
-                return true;
+                return received;
             }
             else if (assetID.Length == 20)
             {
+                // Check whitelist
+                if (!VerifyContract(assetID)) return false;
+
                 // Just transfer immediately
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
                 var Contract = (NEP5Contract)assetID.ToDelegate();
@@ -832,6 +817,7 @@ namespace switcheo
                 if (transferSuccessful) IncreaseBalance(originator, assetID, amount, ReasonDeposit);
                 return transferSuccessful;
             }
+
             // Unknown asset category
             return false;
         }
@@ -1053,5 +1039,6 @@ namespace switcheo
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => originator.Concat(assetID).Concat(Withdraw);
         private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
         private static byte[] VolumeKey(BigInteger bucketNumber, byte[] assetID) => "tradeVolume".AsByteArray().Concat(bucketNumber.AsByteArray()).Concat(assetID);
+        private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
     }
 }
