@@ -179,7 +179,8 @@ namespace switcheo
             }
             else if (Runtime.Trigger == TriggerType.ApplicationR)
             {
-                return operation == "received" ? Received() : false;
+                if (operation == "received") return Received();
+                return false;
             }
             else if (Runtime.Trigger == TriggerType.Verification)
             {
