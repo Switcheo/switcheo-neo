@@ -407,11 +407,15 @@ namespace switcheo
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var outputs = currentTxn.GetOutputs();
 
+            Runtime.Log("Received");
             // Check for double deposits
             if (DepositKey(currentTxn).Length > 1) return false;
 
+            Runtime.Log("No double deposits");
             // if there is input from the contract it is a Withdrawal and we won't deposit anything
             if (IsReceivingFromSelf(currentTxn)) return false;
+
+            Runtime.Log("Not receiving from self");
 
             // Only deposit those assets not from contract
             ulong sentGasAmount = 0;
@@ -433,8 +437,15 @@ namespace switcheo
                 }
             }
             byte[] firstAvailableAddress = currentTxn.GetReferences()[0].ScriptHash;
-            if (sentGasAmount > 0) IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
-            if (sentNeoAmount > 0) IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
+            if (sentGasAmount > 0) {
+                Runtime.Log("Receiving GAS");
+                IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
+            }
+            if (sentNeoAmount > 0) {
+                Runtime.Log("Receiving NEO");
+                IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
+            }
+            Runtime.Log("End Received");
 
             return true;
         }
@@ -797,6 +808,7 @@ namespace switcheo
             // Verify that the offer really has the indicated assets available
             if (assetID.Length == 32)
             {
+                Runtime.Log("Deposit Sytem assets started");
                 // Accept all system assets
                 var received = Received();
 
