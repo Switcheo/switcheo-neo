@@ -80,7 +80,7 @@ namespace switcheo
         private static readonly byte TAUsage_NEP5AssetID = 0xa2;
         private static readonly byte TAUsage_SystemAssetID = 0xa3;
         private static readonly byte TAUsage_WithdrawalAddress = 0xa4;
-        private static readonly byte TAUsage_AdditionalWitness = 0x20; // additional verification script which can be used to ensure any withdrawal txns are intended by the owner
+        // private static readonly byte TAUsage_AdditionalWitness = 0x20; // additional verification script which can be used to ensure any withdrawal txns are intended by the owner
 
         // Byte Constants
         private static readonly byte[] Empty = { };
@@ -107,8 +107,8 @@ namespace switcheo
         // Reason Code for fill failures
         private static readonly byte[] ReasonEmptyOffer = { 0x21 }; // Empty Offer when trying to fill
         private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 asset when trying to fill
-        private static readonly byte[] ReasonFillerDifferentFromMaker = { 0x23 }; // Taking less than 1 asset when trying to fill
-        private static readonly byte[] ReduceBalanceFailed = { 0x24 }; // Taking less than 1 asset when trying to fill
+        private static readonly byte[] ReasonFillerSameAsMaker = { 0x23 }; // Filler same as maker
+        private static readonly byte[] ReduceBalanceFailed = { 0x24 }; // Balance failed
 
         // True or false
         private static readonly byte[] True = { 0x01 };
@@ -572,7 +572,7 @@ namespace switcheo
             if (fillerAddress == offer.MakerAddress) 
             {
                 // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonFillerDifferentFromMaker);
+                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonFillerSameAsMaker);
                 return true;
             }
 
