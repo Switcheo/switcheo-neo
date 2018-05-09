@@ -107,6 +107,8 @@ namespace switcheo
         // Reason Code for fill failures
         private static readonly byte[] ReasonEmptyOffer = { 0x21 }; // Empty Offer when trying to fill
         private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 asset when trying to fill
+        private static readonly byte[] ReasonFillerDifferentFromMaker = { 0x23 }; // Taking less than 1 asset when trying to fill
+        private static readonly byte[] ReduceBalanceFailed = { 0x24 }; // Taking less than 1 asset when trying to fill
 
         // True or false
         private static readonly byte[] True = { 0x01 };
@@ -188,7 +190,7 @@ namespace switcheo
 
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 var withdrawalStage = WithdrawalStage(currentTxn);
-                var withdrawingAddr = GetWithdrawalAddress(currentTxn, withdrawalStage);
+                var withdrawingAddr = GetWithdrawalAddress(currentTxn);
                 var assetID = GetWithdrawalAsset(currentTxn);
                 var isWithdrawingNEP5 = assetID.Length == 20;
                 var inputs = currentTxn.GetInputs();
@@ -555,7 +557,7 @@ namespace switcheo
         private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToFill, bool useNativeTokens)
         {
             // Check that transaction is signed by the filler
-            if (!Runtime.CheckWitness(fillerAddress)) return false;
+            if (!Runtime.CheckWitness(fillerAddress)) return true;
 
             // Check that the offer still exists 
             Offer offer = GetOffer(tradingPair, offerHash);
@@ -567,7 +569,12 @@ namespace switcheo
             }
 
             // Check that the filler is different from the maker
-            if (fillerAddress == offer.MakerAddress) return false;
+            if (fillerAddress == offer.MakerAddress) 
+            {
+                // Notify clients of failure
+                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonFillerDifferentFromMaker);
+                return true;
+            }
 
             // Calculate the max amount that can be offered & filled based on current available amount
             BigInteger amountToTake = (offer.OfferAmount * amountToFill) / offer.WantAmount; // amountToTake's asset type = offerAssetID (taker is taking what is offered)
@@ -585,7 +592,11 @@ namespace switcheo
             }
 
             // Reduce available balance for the filler's asset
-            if (amountToFill > 0 && !ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFill)) return false;
+            if (amountToFill > 0 && !ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFill)) {
+                // Notify clients of failure
+                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReduceBalanceFailed);
+                return true;
+            }
 
             // Calculate offered amount and fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
@@ -727,7 +738,7 @@ namespace switcheo
             var withdrawalStage = WithdrawalStage(currentTxn);
             if (withdrawalStage == Empty) return false;
 
-            var withdrawingAddr = GetWithdrawalAddress(currentTxn, withdrawalStage);
+            var withdrawingAddr = GetWithdrawalAddress(currentTxn);
             var assetID = GetWithdrawalAsset(currentTxn);
             var isWithdrawingNEP5 = assetID.Length == 20;
             var inputs = currentTxn.GetInputs();
@@ -771,7 +782,11 @@ namespace switcheo
                 }
 
                 var amount = GetWithdrawAmount(withdrawingAddr, assetID);
-                if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount)) return false;
+                if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount))
+                {
+                    Runtime.Log("Withdrawing nep5 but failed");
+                    return false;
+                }
 
                 Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
                 EmitWithdrawn(withdrawingAddr, assetID, amount);
@@ -901,10 +916,20 @@ namespace switcheo
 
         private static bool MarkWithdrawal(byte[] address, byte[] assetID, BigInteger amount)
         {
-            if (amount < 1) return false;
-            if (!VerifyWithdrawal(address, assetID)) return false;
+            if (amount < 1) {
+                Runtime.Log("Marking Less than 1");
+                return false;
+            }
+            if (!VerifyWithdrawal(address, assetID)) {
+                Runtime.Log("Verify withdrawal failed");
+                return false;
+            }
 
-            if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal)) return false;
+            if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal)) 
+            {
+                Runtime.Log("Reduce balance for withdrawal failed");
+                return false;
+            }
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
 
             EmitWithdrawing(address, assetID, amount);
@@ -929,13 +954,12 @@ namespace switcheo
             return true;
         }
 
-        private static byte[] GetWithdrawalAddress(Transaction transaction, byte[] withdrawalStage)
+        private static byte[] GetWithdrawalAddress(Transaction transaction)
         {
-            var usage = withdrawalStage == Mark ? TAUsage_AdditionalWitness : TAUsage_WithdrawalAddress;
             var txnAttributes = transaction.GetAttributes();
             foreach (var attr in txnAttributes)
             {
-                if (attr.Usage == usage) return attr.Data.Take(20);
+                if (attr.Usage == TAUsage_WithdrawalAddress) return attr.Data.Take(20);
             }
             return Empty;
         }
