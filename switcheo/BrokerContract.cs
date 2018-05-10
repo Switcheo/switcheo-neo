@@ -30,6 +30,9 @@ namespace switcheo
         [DisplayName("transferred")]
         public static event Action<byte[], byte[], BigInteger, byte[]> EmitTransferred; // (address, assetID, amount, reason)
 
+        [DisplayName("deposited")]
+		public static event Action<byte[], byte[], BigInteger> EmitDeposited; // (address, assetID, amount)
+
         [DisplayName("withdrawing")]
         public static event Action<byte[], byte[], BigInteger> EmitWithdrawing; // (address, assetID, amount)
 
@@ -818,7 +821,7 @@ namespace switcheo
                 // Mark deposit
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 Storage.Put(Context(), DepositKey(currentTxn), 1);
-
+				if (received) EmitDeposited(originator, assetID, amount);
                 return received;
             }
             else if (assetID.Length == 20)
@@ -830,7 +833,12 @@ namespace switcheo
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
                 var Contract = (NEP5Contract)assetID.ToDelegate();
                 var transferSuccessful = (bool)Contract("transfer", args);
-                if (transferSuccessful) IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+                if (transferSuccessful)
+				{
+					IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+					EmitDeposited(originator, assetID, amount);
+				}
+
                 return transferSuccessful;
             }
 
