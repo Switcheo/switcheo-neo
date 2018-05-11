@@ -22,7 +22,7 @@ namespace switcheo
         public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
 
         [DisplayName("failed")]
-        public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToFill, useNativeTokens, reason)
+		public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToTake, useNativeTokens, reason)
 
         [DisplayName("cancelled")]
         public static event Action<byte[], byte[]> EmitCancelled; // (address, offerHash)
@@ -62,8 +62,6 @@ namespace switcheo
         private static readonly byte[] NativeToken = "AbwJtGDCcwoH2HhDmDq12ZcqFmUpCU3XMp".ToScriptHash();
         private const ulong feeFactor = 1000000; // 1 => 0.0001%
         private const int maxFee = 5000; // 5000/1000000 = 0.5%
-        private const int bucketDuration = 86400; // 86400secs = 24hrs
-        private const int nativeTokenDiscount = 2; // 1/2 => 50%
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -288,8 +286,6 @@ namespace switcheo
 
                 // == Getters ==
                 if (operation == "getState") return GetState();
-                if (operation == "getMakerFee") return GetMakerFee(args.Length == 1 ? (byte[])args[0] : Empty);
-                if (operation == "getTakerFee") return GetTakerFee(args.Length == 1 ? (byte[])args[0] : Empty);
                 if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getOffer") return GetOffer((byte[])args[0], (byte[])args[1]);
@@ -314,8 +310,8 @@ namespace switcheo
                 if (operation == "fillOffer")
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 5) return false;
-                    return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (bool)args[4]);
+                    if (args.Length != 6) return false;
+					return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (bool)args[4], (BigInteger)args[5], (BigInteger)args[6]);
                 }
                 if (operation == "cancelOffer")
                 {
@@ -350,21 +346,6 @@ namespace switcheo
                 {
                     if (args.Length != 1) return false;
                     return SetGasFaucetAddress((byte[])args[0]);;
-                }
-                if (operation == "setMakerFee")
-                {
-                    if (args.Length != 2) return false;
-                    return SetMakerFee((BigInteger)args[0], (byte[])args[1]);
-                }
-                if (operation == "setTakerFee")
-                {
-                    if (args.Length != 2) return false;
-                    return SetTakerFee((BigInteger)args[0], (byte[])args[1]);
-                }
-                if (operation == "resetTakerFee")
-                {
-                    if (args.Length != 2) return false;
-                    return ResetTakerFee((byte[])args[0]);
                 }
                 if (operation == "setFeeAddress")
                 {
@@ -463,22 +444,6 @@ namespace switcheo
             return Storage.Get(Context(), "state");
         }
 
-        private static BigInteger GetMakerFee(byte[] assetID)
-        {
-            var fee = Storage.Get(Context(), "makerFee".AsByteArray().Concat(assetID));
-            if (fee.Length != 0 || assetID.Length == 0) return fee.AsBigInteger();
-
-            return Storage.Get(Context(), "makerFee").AsBigInteger();
-        }
-
-        private static BigInteger GetTakerFee(byte[] assetID)
-        {
-            var fee = Storage.Get(Context(), "takerFee".AsByteArray().Concat(assetID));
-            if (fee.Length != 0 || assetID.Length == 0) return fee.AsBigInteger();
-
-            return Storage.Get(Context(), "takerFee").AsBigInteger();
-        }
-
         private static BigInteger GetBalance(byte[] originator, byte[] assetID)
         {
             return Storage.Get(Context(), BalanceKey(originator, assetID)).AsBigInteger();
@@ -555,10 +520,12 @@ namespace switcheo
             return true;
         }
 
-        // Fills an offer by filling the amount the offerer wants
+        // Fills an offer by taking the amount you want
         // => amountToFill's asset type = offer's wantAssetID
-        private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToFill, bool useNativeTokens)
+		// amountToTake's asset type = offerAssetID (taker is taking what is offered)
+		private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToTake, bool useNativeTokens, BigInteger takerFeeAmount)
         {
+			bool verificationPassed = false;
             // Check that transaction is signed by the filler
             if (!Runtime.CheckWitness(fillerAddress)) return true;
 
@@ -566,109 +533,96 @@ namespace switcheo
             Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty)
             {
-                // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonEmptyOffer);
+				EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonEmptyOffer);
                 return true;
             }
 
             // Check that the filler is different from the maker
-            if (fillerAddress == offer.MakerAddress) 
+            if (fillerAddress == offer.MakerAddress)
             {
-                // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonFillerSameAsMaker);
+				EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonFillerSameAsMaker);
                 return true;
-            }
+			}
 
-            // Calculate the max amount that can be offered & filled based on current available amount
-            BigInteger amountToTake = (offer.OfferAmount * amountToFill) / offer.WantAmount; // amountToTake's asset type = offerAssetID (taker is taking what is offered)
+            // Check that the amount that will be taken is at least 1
+            if (amountToTake < 1)
+            {
+                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonTakingLessThanOne);
+                return true;
+			}
+
+            // Check that you cannot take more than available
             if (amountToTake > offer.AvailableAmount)
             {
-                amountToTake = offer.AvailableAmount;
-                amountToFill = (amountToTake * offer.WantAmount) / offer.OfferAmount;
-            }
-            // Check that the amount that will be taken is at least 1
-            if (amountToTake <= 0)
-            {
-                // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonTakingLessThanOne);
+                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonTakingMoreThanAvailable);
                 return true;
             }
 
+			// Calculate amount we have to give the offerer (what the offerer wants)
+			BigInteger amountToFill = (offer.OfferAmount * amountToTake) / offer.WantAmount;
+
+            // Check that amount to fill/give is not less than 1
+            if (amountToFill < 1)
+            {
+				EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonFillingLessThanOne);
+                return true;
+			}
+
+			// Check that there is enough balance to reduce for filler
+			var fillerBalance = GetBalance(fillerAddress, offer.WantAssetID);
+			if (fillerBalance >= amountToFill) // TODO: IS THIS NEEDED? + (useNativeTokens ? 0 : takerFeeAmount)
+            {
+                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonNotEnoughBalanceOnFiller);
+                return true;
+			}
+
+			// TODO: Check that there is enough balance if using native fees
+			var fillerNativeTokenBalance = GetBalance(fillerAddress, NativeToken);
+			if (useNativeTokens && fillerNativeTokenBalance >= takerFeeAmount)
+            {
+				EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonNotEnoughBalanceOnNativeToken);
+                return true;
+			}
+
+            // TODO: Check that the amountToTake is not more than 0.5% for non native assets
+			if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake <= 5))
+            {
+                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonFeesMoreThanLimit);
+                return true;
+            }
+            
             // Reduce available balance for the filler's asset
-            if (amountToFill > 0 && !ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFill)) {
-                // Notify clients of failure
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReduceBalanceFailed);
-                return true;
-            }
-
-            // Calculate offered amount and fees
-            byte[] feeAddress = Storage.Get(Context(), "feeAddress");
-            BigInteger makerFeeRate = GetMakerFee(offer.WantAssetID);
-            BigInteger takerFeeRate = GetTakerFee(offer.OfferAssetID);
-            BigInteger makerFee = (amountToFill * makerFeeRate) / feeFactor;
-            BigInteger takerFee = (amountToTake * takerFeeRate) / feeFactor;
-            BigInteger nativeFee = 0;
-
-            // Calculate native fees (SWH)
-            if (offer.OfferAssetID == NativeToken) {
-                nativeFee = takerFee / nativeTokenDiscount;
-            }
-            else if (useNativeTokens)
-            {
-                Runtime.Log("Using Native Fees...");
-
-                // Use current trading period's exchange rate
-                var bucketNumber = CurrentBucket();
-                Volume volume = GetVolume(bucketNumber, offer.OfferAssetID);
-
-                // Derive rate from volumes traded
-                var nativeVolume = volume.Native;
-                var foreignVolume = volume.Foreign;
-
-                // Use native fee, if we can get an exchange rate
-                if (foreignVolume > 0)
-                {
-                    nativeFee = (takerFee * nativeVolume) / (foreignVolume * nativeTokenDiscount);
-                }
-                // Reduce balance immediately from taker
-                if (!ReduceBalance(fillerAddress, NativeToken, nativeFee, ReasonTakerFee))
-                {
-                    // Reset to 0 if balance is insufficient
-                    nativeFee = 0;
-                }
-            }
-
+			ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFill);
+            
             // Move asset to the taker balance and notify clients
-            var takerAmount = amountToTake - (nativeFee > 0 ? 0 : takerFee);
-            IncreaseBalance(fillerAddress, offer.OfferAssetID, takerAmount, ReasonTakerReceive);
+			IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTake, ReasonTakerReceive);
 
             // Move asset to the maker balance and notify clients
-            var makerAmount = amountToFill - makerFee;
-            IncreaseBalance(offer.MakerAddress, offer.WantAssetID, makerAmount, ReasonMakerReceive);
-
-            // Move fees
-            if (makerFee > 0) IncreaseBalance(feeAddress, offer.WantAssetID, makerFee, ReasonContractMakerFee);
-            if (nativeFee == 0) IncreaseBalance(feeAddress, offer.OfferAssetID, takerFee, ReasonContractTakerFee);
-
-            // Update native token volumes that will be used as exchange rate
-            if (offer.OfferAssetID == NativeToken)
-            {
-                AddVolume(offer.WantAssetID, amountToTake, amountToFill);
-            }
-            if (offer.WantAssetID == NativeToken)
-            {
-                AddVolume(offer.OfferAssetID, amountToFill, amountToTake);
-            }
+			IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToTake;
 
             // Store updated offer
             StoreOffer(tradingPair, offerHash, offer);
-
+            
             // Notify clients
             EmitFilled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount, amountToTake);
-            EmitFeesSent(feeAddress, offerHash, offer.OfferAssetID, makerFee, offer.WantAssetID, takerFee);
+
+			// Move fees
+			byte[] feeAddress = Storage.Get(Context(), "feeAddress");
+			if (useNativeTokens)
+			{
+				if (takerFeeAmount > 0) IncreaseBalance(feeAddress, NativeToken, takerFeeAmount, ReasonContractTakerFee);
+			}
+			else
+			{
+				if (takerFeeAmount > 0) IncreaseBalance(feeAddress, NativeToken, takerFeeAmount, ReasonContractTakerFee);
+			}
+
+			// Notify clients
+			EmitFeesSent(feeAddress, offerHash, useNativeTokens ? offer.OfferAssetID : NativeToken, makerFeeAmount, useNativeTokens ? offer.WantAssetID : NativeToken, takerFeeAmount);
+            
             return true;
         }
 
