@@ -326,12 +326,14 @@ namespace switcheo
                 }
                 if (operation == "freezeTrading")
                 {
+                    if (!Runtime.CheckWitness(GetGasFaucetAddress())) return false; // ensure both gas faucet and owner signed
                     Storage.Put(Context(), "state", Inactive);
                     EmitTradingFrozen();
                     return true;
                 }
                 if (operation == "unfreezeTrading")
                 {
+                    if (!Runtime.CheckWitness(GetGasFaucetAddress())) return false; // ensure both gas faucet and owner signed
                     Storage.Put(Context(), "state", Active);
                     EmitTradingResumed();
                     return true;
