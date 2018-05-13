@@ -315,7 +315,11 @@ namespace switcheo
                 }
                 if (operation == "withdraw")
                 {
-                    return ProcessWithdrawal();
+					if (args.Length == 2) {
+						return ProcessWithdrawal();
+					}
+
+					return false;
                 }
 
                 // == Owner ==
@@ -422,11 +426,9 @@ namespace switcheo
             return true;
         }
 
-        private static bool Initialize(BigInteger takerFee, BigInteger makerFee, byte[] feeAddress, byte[] gasFaucetAddress)
+        private static bool Initialize(byte[] feeAddress, byte[] gasFaucetAddress)
         {
             if (GetState() != Pending) return false;
-            if (!SetMakerFee(makerFee, Empty)) return false;
-            if (!SetTakerFee(takerFee, Empty)) return false;
             if (!SetFeeAddress(feeAddress)) return false;
             if (!SetGasFaucetAddress(gasFaucetAddress)) return false;
 
@@ -622,7 +624,7 @@ namespace switcheo
             // Check that transaction is signed by the canceller or Check that transaction is signed by gas faucet if trading is frozen 
             if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && Runtime.CheckWitness(GetGasFaucetAddress())))) return false;
 
-            // Move funds to withdrawal address
+            // Move funds to maker address
             IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
 
             // Remove offer
@@ -632,34 +634,8 @@ namespace switcheo
             EmitCancelled(offer.MakerAddress, offerHash);
             return true;
         }
-
-        private static bool SetMakerFee(BigInteger fee, byte[] assetID)
-        {
-            if (fee > maxFee) return false;
-            if (fee < 0) return false;
-
-            Storage.Put(Context(), "makerFee".AsByteArray().Concat(assetID), fee);
-
-            return true;
-        }
-
-        private static bool SetTakerFee(BigInteger fee, byte[] assetID)
-        {
-            if (fee > maxFee) return false;
-            if (fee < 0) return false;
-
-            Storage.Put(Context(), "takerFee".AsByteArray().Concat(assetID), fee);
-
-            return true;
-        }
-
-        private static bool ResetTakerFee(byte[] assetID)
-        {
-            Storage.Delete(Context(), "takerFee".AsByteArray().Concat(assetID));
-
-            return true;
-        }
-
+       
+      
         private static bool SetFeeAddress(byte[] feeAddress)
         {
             if (feeAddress.Length != 20) return false;
