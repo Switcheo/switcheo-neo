@@ -276,7 +276,7 @@ namespace switcheo
                         return false;
                     }
                     if (args.Length != 4) return false;
-                    return Initialize((BigInteger)args[0], (BigInteger)args[1], (byte[])args[2], (byte[])args[3]);
+                    return Initialize((byte[])args[2], (byte[])args[3]);
                 }
 
                 // == Getters ==
@@ -635,7 +635,6 @@ namespace switcheo
             return true;
         }
        
-      
         private static bool SetFeeAddress(byte[] feeAddress)
         {
             if (feeAddress.Length != 20) return false;
