@@ -19,7 +19,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake)
 
         [DisplayName("fees")]
-        public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
+        public static event Action<byte[], byte[], byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
 
         [DisplayName("failed")]
 		public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToTake, useNativeTokens, reason)
@@ -38,10 +38,7 @@ namespace switcheo
 
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger> EmitWithdrawn; // (address, assetID, amount)
-
-        [DisplayName("volumeAdded")]
-        public static event Action<byte[], BigInteger, BigInteger> EmitVolumeAdded; // (assetID, nativeAmount, foreignAmount)
-
+              
         [DisplayName("gasFaucetSet")]
         public static event Action<byte[]> EmitGasFaucetSet; // (address)
 
@@ -106,11 +103,15 @@ namespace switcheo
         private static readonly byte[] ReasonPrepareWithdrawal = { 0x0b }; // Balance reduced due to preparing for asset withdrawal
 
         // Reason Code for fill failures
-        private static readonly byte[] ReasonEmptyOffer = { 0x21 }; // Empty Offer when trying to fill
+		private static readonly byte[] ReasonOfferNotExist = { 0x21 }; // Empty Offer when trying to fill
         private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 asset when trying to fill
         private static readonly byte[] ReasonFillerSameAsMaker = { 0x23 }; // Filler same as maker
-        private static readonly byte[] ReduceBalanceFailed = { 0x24 }; // Balance failed
-
+		private static readonly byte[] ReasonTakingMoreThanAvailable = { 0x24 }; // Taking more than available in the offer at the moment
+		private static readonly byte[] ReasonFillingLessThanOne = { 0x25 }; // Filling less than 1 asset when trying to fill
+		private static readonly byte[] ReasonNotEnoughBalanceOnFiller = { 0x26 }; // Not enough balance to give (wantAssetID) for what you want to take (offerAssetID)
+		private static readonly byte[] ReasonNotEnoughBalanceOnNativeToken = { 0x27 }; // Not enough balance in native tokens to use
+		private static readonly byte[] ReasonFeesMoreThanLimit = { 0x28 }; // Fees exceed 0.5%
+		      
         // True or false
         private static readonly byte[] True = { 0x01 };
         private static readonly byte[] False = { 0x00 };
@@ -126,12 +127,6 @@ namespace switcheo
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
             public byte[] Nonce;
-        }
-
-        private struct Volume
-        {
-            public BigInteger Native;
-            public BigInteger Foreign;
         }
 
         private static Offer NewOffer(
@@ -286,7 +281,6 @@ namespace switcheo
 
                 // == Getters ==
                 if (operation == "getState") return GetState();
-                if (operation == "getExchangeRate") return GetExchangeRate((byte[])args[0]);
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getOffer") return GetOffer((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
@@ -311,7 +305,7 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
-					return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (bool)args[4], (BigInteger)args[5], (BigInteger)args[6]);
+					return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (bool)args[4], (BigInteger)args[5]);
                 }
                 if (operation == "cancelOffer")
                 {
@@ -459,12 +453,6 @@ namespace switcheo
             return Storage.Get(Context(), WithdrawKey(originator, assetID)).AsBigInteger();
         }
 
-        private static Volume GetExchangeRate(byte[] assetID) // against native token
-        {
-            var bucketNumber = CurrentBucket();
-            return GetVolume(bucketNumber, assetID);
-        }
-
         private static Offer[] GetOffers(byte[] tradingPair, byte[] offset) // offerAssetID.Concat(wantAssetID)
         {
             var result = new Offer[50];
@@ -525,7 +513,8 @@ namespace switcheo
 		// amountToTake's asset type = offerAssetID (taker is taking what is offered)
 		private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToTake, bool useNativeTokens, BigInteger takerFeeAmount)
         {
-			bool verificationPassed = false;
+			// Do all checks first then execute logic
+
             // Check that transaction is signed by the filler
             if (!Runtime.CheckWitness(fillerAddress)) return true;
 
@@ -533,7 +522,7 @@ namespace switcheo
             Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty)
             {
-				EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonEmptyOffer);
+				EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonOfferNotExist);
                 return true;
             }
 
@@ -561,7 +550,7 @@ namespace switcheo
 			// Calculate amount we have to give the offerer (what the offerer wants)
 			BigInteger amountToFill = (offer.OfferAmount * amountToTake) / offer.WantAmount;
 
-            // Check that amount to fill/give is not less than 1
+			// Check that amount to fill(give) is not less than 1
             if (amountToFill < 1)
             {
 				EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokens ? True : False, ReasonFillingLessThanOne);
@@ -570,21 +559,21 @@ namespace switcheo
 
 			// Check that there is enough balance to reduce for filler
 			var fillerBalance = GetBalance(fillerAddress, offer.WantAssetID);
-			if (fillerBalance >= amountToFill) // TODO: IS THIS NEEDED? + (useNativeTokens ? 0 : takerFeeAmount)
+			if (fillerBalance < amountToFill)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonNotEnoughBalanceOnFiller);
                 return true;
 			}
 
-			// TODO: Check that there is enough balance if using native fees
-			var fillerNativeTokenBalance = GetBalance(fillerAddress, NativeToken);
-			if (useNativeTokens && fillerNativeTokenBalance >= takerFeeAmount)
+			// Check that there is enough balance in native fees if using native fees
+			var fillerNativeTokenBalance = GetBalance(fillerAddress, NativeToken);         
+			if (useNativeTokens && fillerNativeTokenBalance < takerFeeAmount)
             {
 				EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonNotEnoughBalanceOnNativeToken);
                 return true;
 			}
 
-            // TODO: Check that the amountToTake is not more than 0.5% for non native assets
+            // Check that the amountToTake is not more than 0.5% if not using native fees
 			if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake <= 5))
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokens ? True : False, ReasonFeesMoreThanLimit);
@@ -611,17 +600,12 @@ namespace switcheo
 
 			// Move fees
 			byte[] feeAddress = Storage.Get(Context(), "feeAddress");
-			if (useNativeTokens)
+			var takerFeeAssetID = useNativeTokens ? NativeToken : offer.OfferAssetID;
+			if (takerFeeAmount > 0)
 			{
-				if (takerFeeAmount > 0) IncreaseBalance(feeAddress, NativeToken, takerFeeAmount, ReasonContractTakerFee);
+				IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
+				EmitFeesSent(feeAddress, offerHash, takerFeeAssetID, takerFeeAmount);
 			}
-			else
-			{
-				if (takerFeeAmount > 0) IncreaseBalance(feeAddress, NativeToken, takerFeeAmount, ReasonContractTakerFee);
-			}
-
-			// Notify clients
-			EmitFeesSent(feeAddress, offerHash, useNativeTokens ? offer.OfferAssetID : NativeToken, makerFeeAmount, useNativeTokens ? offer.WantAssetID : NativeToken, takerFeeAmount);
             
             return true;
         }
@@ -962,54 +946,7 @@ namespace switcheo
 
             return Hash256(bytes);
         }
-
-        // Add volume to the current reference assetID e.g. NEO/SWH: Add nativeAmount to SWH volume and foreignAmount to NEO volume
-        private static bool AddVolume(byte[] assetID, BigInteger nativeAmount, BigInteger foreignAmount) 
-        {
-            // Retrieve all volumes from current 24 hr bucket
-            var bucketNumber = CurrentBucket();
-            var volumeKey = VolumeKey(bucketNumber, assetID);
-            byte[] volumeData = Storage.Get(Context(), volumeKey);
-
-            Volume volume;
-
-            // Either create a new record or add to existing volume
-            if (volumeData.Length == 0)
-            {
-                volume = new Volume
-                {
-                    Native = nativeAmount,
-                    Foreign = foreignAmount
-                };
-            }
-            else
-            {
-                volume = (Volume)volumeData.Deserialize();
-                volume.Native = volume.Native + nativeAmount;
-                volume.Foreign = volume.Foreign + foreignAmount;
-            }
-
-            // Save to blockchain
-            Storage.Put(Context(), volumeKey, volume.Serialize());
-            EmitVolumeAdded(assetID, nativeAmount, foreignAmount);
-            Runtime.Log("Done serializing and storing");
-
-            return true;
-        }
-
-        // Retrieves the native and foreign volume of a reference assetID in the current 24 hr bucket
-        private static Volume GetVolume(BigInteger bucketNumber, byte[] assetID)
-        {
-            byte[] volumeData = Storage.Get(Context(), VolumeKey(bucketNumber, assetID));
-            if (volumeData.Length == 0)
-            {
-                return new Volume();
-            }
-            else {
-                return (Volume)volumeData.Deserialize();
-            }
-        }
-
+        
         private static bool IsTradingFrozen()
         {
             return (Storage.Get(Context(), "stateContractWhitelist") == Inactive);
@@ -1017,7 +954,6 @@ namespace switcheo
 
         // Helpers
         private static StorageContext Context() => Storage.CurrentContext;
-        private static BigInteger CurrentBucket() => Runtime.Time / bucketDuration;
         private static byte[] IndexAsByteArray(ushort index) => index > 0 ? ((BigInteger)index).AsByteArray() : Empty;
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID);
 
