@@ -22,7 +22,7 @@ namespace switcheo
         public static event Action<byte[], byte[], byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
 
         [DisplayName("failed")]
-        public static event Action<byte[], byte[], BigInteger, byte[], byte[]> EmitFailed; // (address, offerHash, amountToTake, useNativeTokens, reason)
+        public static event Action<byte[], byte[], BigInteger, byte[]> EmitFailed; // (address, offerHash, amountToTake, reason)
 
         [DisplayName("cancelled")]
         public static event Action<byte[], byte[]> EmitCancelled; // (address, offerHash)
@@ -191,7 +191,7 @@ namespace switcheo
                 if (withdrawalStage == Mark)
                 {
                     // Check that txn is signed
-                    if (!(Runtime.CheckWitness(withdrawingAddr) || Runtime.CheckWitness(GetCoordinatorAddress()))) return false;
+                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: also allow if announced
 
                     // Check that withdrawal is possible
                     if (!VerifyWithdrawal(withdrawingAddr, assetID)) return false;
@@ -302,7 +302,7 @@ namespace switcheo
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
                     if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
-                    return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (bool)args[4], (BigInteger)args[5]);
+                    return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
                 if (operation == "cancelOffer")
                 {
@@ -547,7 +547,7 @@ namespace switcheo
         // Fills an offer by taking the amount you want
         // => amountToFill's asset type = offer's wantAssetID
         // amountToTake's asset type = offerAssetID (taker is taking what is offered)
-        private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToTake, bool useNativeTokens, BigInteger takerFeeAmount)
+        private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToTake, byte[] takerFeeAssetID, BigInteger takerFeeAmount)
         {
             // Note: We do all checks first then execute state changes
 
@@ -556,31 +556,30 @@ namespace switcheo
 
             // Check that the offer still exists 
             Offer offer = GetOffer(tradingPair, offerHash);
-            byte[] useNativeTokensBytes = useNativeTokens ? True : False;
             if (offer.MakerAddress == Empty)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonOfferNotExist);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonOfferNotExist);
                 return false;
             }
 
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonFillerSameAsMaker);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonFillerSameAsMaker);
                 return false;
             }
 
             // Check that the amount that will be taken is at least 1
             if (amountToTake < 1)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonTakingLessThanOne);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonTakingLessThanOne);
                 return false;
             }
 
             // Check that you cannot take more than available
             if (amountToTake > offer.AvailableAmount)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonTakingMoreThanAvailable);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonTakingMoreThanAvailable);
                 return false;
             }
 
@@ -590,7 +589,7 @@ namespace switcheo
             // Check that amount to fill(give) is not less than 1
             if (amountToFill < 1)
             {
-                EmitFailed(fillerAddress, offerHash, amountToFill, useNativeTokensBytes, ReasonFillingLessThanOne);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonFillingLessThanOne);
                 return false;
             }
 
@@ -598,33 +597,49 @@ namespace switcheo
             var fillerBalance = GetBalance(fillerAddress, offer.WantAssetID);
             if (fillerBalance < amountToFill)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonNotEnoughBalanceOnFiller);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonNotEnoughBalanceOnFiller);
                 return false;
             }
+
+            // Check the fee type
+            bool useNativeTokens = takerFeeAssetID != offer.OfferAssetID;
 
             // Check that there is enough balance in native fees if using native fees
             var fillerNativeTokenBalance = GetBalance(fillerAddress, NativeToken);
             if (useNativeTokens && fillerNativeTokenBalance < takerFeeAmount)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonNotEnoughBalanceOnNativeToken);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonNotEnoughBalanceOnNativeToken);
                 return false;
             }
 
             // Check that the amountToTake is not more than 0.5% if not using native fees
             if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake <= 5))
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, useNativeTokensBytes, ReasonFeesMoreThanLimit);
+                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonFeesMoreThanLimit);
                 return false;
             }
 
-            // Reduce available balance for the filler's asset
+            // Reduce balance from filler
             ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFill);
 
-            // Move asset to the taker balance and notify clients
-            IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTake, ReasonTakerReceive);
-
-            // Move asset to the maker balance and notify clients
+            // Move filled asset to the maker balance
             IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
+
+            // Move taken asset to the taker balance
+            var amountToTakeAfterFees = useNativeTokens ? amountToTake : amountToTake - takerFeeAmount;
+            IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
+
+            // Move fees
+            byte[] feeAddress = Storage.Get(Context(), "feeAddress");
+            if (takerFeeAmount > 0)
+            {
+                ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
+                if (!useNativeTokens)
+                {
+                    IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
+                    EmitFeesSent(feeAddress, offerHash, takerFeeAssetID, takerFeeAmount);
+                }
+            }
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToTake;
@@ -634,15 +649,6 @@ namespace switcheo
 
             // Notify clients
             EmitFilled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount, amountToTake);
-
-            // Move fees
-            byte[] feeAddress = Storage.Get(Context(), "feeAddress");
-            var takerFeeAssetID = useNativeTokens ? NativeToken : offer.OfferAssetID;
-            if (takerFeeAmount > 0)
-            {
-                IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
-                EmitFeesSent(feeAddress, offerHash, takerFeeAssetID, takerFeeAmount);
-            }
 
             return true;
         }
@@ -954,5 +960,7 @@ namespace switcheo
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
+        private static byte[] CancelAnnounceKey(byte[] offerHash) => "cancelAnnounce".AsByteArray().Concat(offerHash);
+        private static byte[] WithdrawAnnounceKey(byte[] originator, byte[] assetID) => "withdrawAnnounce".AsByteArray().Concat(originator).Concat(assetID);
     }
 }
