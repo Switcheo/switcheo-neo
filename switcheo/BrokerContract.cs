@@ -334,8 +334,7 @@ namespace switcheo
                 if (operation == "withdraw")
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 1) return false;
-                    return ProcessWithdrawal((BigInteger) args[0]);
+                    return ProcessWithdrawal(args);
                 }
                 if (operation == "announceCancel")
                 {
@@ -894,7 +893,7 @@ namespace switcheo
             return true;
         }
 
-        private static object ProcessWithdrawal(BigInteger amount)
+        private static object ProcessWithdrawal(object[] args)
         {
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
@@ -908,6 +907,9 @@ namespace switcheo
 
             if (withdrawalStage == Mark)
             {
+                if (args.Length != 1) return false;
+                var amount = (BigInteger)args[0];
+
                 if (isWithdrawingNEP5)
                 {
                     if (amount > 0) Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
@@ -941,7 +943,7 @@ namespace switcheo
                     Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
                 }
 
-                amount = GetWithdrawAmount(withdrawingAddr, assetID);
+                var amount = GetWithdrawAmount(withdrawingAddr, assetID);
 
                 if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount))
                 {
