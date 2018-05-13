@@ -666,14 +666,6 @@ namespace switcheo
             EmitCancelled(offer.MakerAddress, offerHash);
             return true;
         }
-<<<<<<< a08e8760fa25fd4bee14dd5a002cc7ca8a857945
-       
-        private static bool SetFeeAddress(byte[] feeAddress)
-        {
-            if (feeAddress.Length != 20) return false;
-            Storage.Put(Context(), "feeAddress", feeAddress);
-=======
->>>>>>> Refactor & group similar methods
 
         private static void StoreOffer(byte[] tradingPair, byte[] offerHash, Offer offer)
         {
