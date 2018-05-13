@@ -1,4 +1,4 @@
-﻿using Neo.SmartContract.Framework;
+using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
 using Neo.SmartContract.Framework.Services.System;
 using System;
@@ -192,16 +192,16 @@ namespace switcheo
                     // Check that the transaction is signed by the coordinator
                     if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: or pre-announced
 
-                    // Check that withdrawal is possible
+                    // Check that withdrawal is possible (Enough balance and nothing reserved for withdrawing. Only 1 withdraw can happen at a time)
                     if (!VerifyWithdrawal(withdrawingAddr, assetID)) return false;
 
-                    // Check that inputs are not already reserved
+                    // Check that inputs are not already reserved (We cannot use a utxo that is already reserved)
                     foreach (var i in inputs)
                     {
                         if (Storage.Get(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex))).Length > 0) return false;
                     }
 
-                    // Check that outputs are a valid self-send
+                    // Check that outputs are a valid self-send (In marking phase, all assets from contract should be sent to contract and nothing should go anywhere else)
                     var authorizedAssetID = isWithdrawingNEP5 ? GasAssetID : assetID;
                     foreach (var o in outputs)
                     {
@@ -613,7 +613,7 @@ namespace switcheo
             }
 
             // Check that the amountToTake is not more than 0.5% if not using native fees
-            if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake <= 5))
+            if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake > 5))
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFeesMoreThanLimit);
                 return false;
@@ -633,7 +633,6 @@ namespace switcheo
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             if (takerFeeAmount > 0)
             {
-                ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
                 if (!useNativeTokens)
                 {
                     IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
@@ -944,7 +943,7 @@ namespace switcheo
                 if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return true;
             }
             return false;
-        }       
+        }
 
         // Unique hash for an offer
         private static byte[] Hash(Offer o)
