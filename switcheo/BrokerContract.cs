@@ -22,7 +22,7 @@ namespace switcheo
         public static event Action<byte[], byte[], byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, offerAssetID, makerFee, wantAssetID, takerFee);
 
         [DisplayName("failed")]
-        public static event Action<byte[], byte[], BigInteger, byte[]> EmitFailed; // (address, offerHash, amountToTake, reason)
+        public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[]> EmitFailed; // (address, offerHash, amountToTake, takerFeeAsssetID, takerFee, reason)
 
         [DisplayName("cancelled")]
         public static event Action<byte[], byte[]> EmitCancelled; // (address, offerHash)
@@ -559,28 +559,28 @@ namespace switcheo
             Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonOfferNotExist);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonOfferNotExist);
                 return false;
             }
 
             // Check that the filler is different from the maker
             if (fillerAddress == offer.MakerAddress)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonFillerSameAsMaker);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFillerSameAsMaker);
                 return false;
             }
 
             // Check that the amount that will be taken is at least 1
             if (amountToTake < 1)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonTakingLessThanOne);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonTakingLessThanOne);
                 return false;
             }
 
             // Check that you cannot take more than available
             if (amountToTake > offer.AvailableAmount)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonTakingMoreThanAvailable);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonTakingMoreThanAvailable);
                 return false;
             }
 
@@ -590,7 +590,7 @@ namespace switcheo
             // Check that amount to fill(give) is not less than 1
             if (amountToFill < 1)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonFillingLessThanOne);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFillingLessThanOne);
                 return false;
             }
 
@@ -598,7 +598,7 @@ namespace switcheo
             var fillerBalance = GetBalance(fillerAddress, offer.WantAssetID);
             if (fillerBalance < amountToFill)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonNotEnoughBalanceOnFiller);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnFiller);
                 return false;
             }
 
@@ -608,14 +608,14 @@ namespace switcheo
             // Check that there is enough balance in native fees if using native fees
             if (useNativeTokens && GetBalance(fillerAddress, takerFeeAssetID) < takerFeeAmount)
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonNotEnoughBalanceOnNativeToken);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnNativeToken);
                 return false;
             }
 
             // Check that the amountToTake is not more than 0.5% if not using native fees
             if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake <= 5))
             {
-                EmitFailed(fillerAddress, offerHash, amountToTake, ReasonFeesMoreThanLimit);
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFeesMoreThanLimit);
                 return false;
             }
 
