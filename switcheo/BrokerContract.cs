@@ -196,12 +196,12 @@ namespace switcheo
                 var inputs = currentTxn.GetInputs();
                 var outputs = currentTxn.GetOutputs();
 
+                // Check that Application trigger will be tail called with the correct params
+                if (currentTxn.Type != Type_InvocationTransaction) return false;
+
                 ulong totalOut = 0;
                 if (withdrawalStage == Mark)
                 {
-                    // Check that withdrawal is possible (Enough balance and nothing reserved for withdrawing. Only 1 withdraw can happen at a time)
-                    if (!VerifyWithdrawal(withdrawingAddr, assetID)) return false;
-
                     // Check that inputs are not already reserved (We cannot use a utxo that is already reserved)
                     foreach (var i in inputs)
                     {
@@ -217,18 +217,31 @@ namespace switcheo
                         if (o.AssetId != authorizedAssetID) return false;
                     }
 
+                    // Check that withdrawal is possible (Enough balance and nothing reserved for withdrawing. Only 1 withdraw can happen at a time)
+                    var amount = isWithdrawingNEP5 ? (BigInteger)args[0] : totalOut;
+                    if (!VerifyWithdrawal(withdrawingAddr, assetID, amount)) return false;
+
                     // Check that the transaction is signed by the coordinator or pre-announced
-                    var amount = isWithdrawingNEP5 ? GetBalance(withdrawingAddr, assetID) : totalOut; // TODO: fix me if NEP-5 amt can be specified
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress()) && !IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                    var trusted = Runtime.CheckWitness(GetCoordinatorAddress());
+                    if (!trusted && !IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
 
                     // Check that NEP5 withdrawals don't reserve more utxos than required
                     if (isWithdrawingNEP5)
                     {
                         if (inputs.Length > 1) return false;
                         if (outputs[0].Value > 1) return false;
+
+                        // Make user pay if this is not a trusted call (prevents denial-of-service through spamming after pre-announcement)
+                        if (!trusted)
+                        {
+                            foreach (var i in currentTxn.GetReferences())
+                            {
+                                if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                            }
+                        }
                     }
 
-                    // Check that inputs are not wasted (prevent DOS on withdrawals)
+                    // Check that inputs are not wasted (prevent denial-of-service by using additional inputs)
                     if (outputs.Length - inputs.Length > 1) return false;
                 }
                 else if (withdrawalStage == Withdraw)
@@ -252,6 +265,10 @@ namespace switcheo
                     // Check withdrawal amount
                     var authorizedAmount = isWithdrawingNEP5 ? 1 : GetWithdrawAmount(withdrawingAddr, assetID);
                     if (totalOut != authorizedAmount) return false;
+
+                    // Check script params
+                    var invocationTransaction = (InvocationTransaction)currentTxn;
+                    if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
                 }
                 else
                 {
@@ -262,11 +279,6 @@ namespace switcheo
                 ulong totalIn = 0;
                 foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
                 if (totalIn != totalOut) return false;
-
-                // Check that Application trigger will be tail called with the correct params
-                if (currentTxn.Type != Type_InvocationTransaction) return false;
-                var invocationTransaction = (InvocationTransaction)currentTxn;
-                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
 
                 return true;
             }
@@ -323,7 +335,7 @@ namespace switcheo
                 {
                     if (GetState() == Pending) return false;
                     if (args.Length != 2) return false;
-                    return ProcessWithdrawal();
+                    return ProcessWithdrawal((BigInteger) args[0]);
                 }
                 if (operation == "announceCancel")
                 {
@@ -846,10 +858,10 @@ namespace switcheo
          * Withdrawal *
          **************/
 
-        private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID)
+        private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
             var balance = GetBalance(holderAddress, assetID);
-            if (balance <= 0) return false;
+            if (balance < amount) return false;
 
             var withdrawingAmount = GetWithdrawAmount(holderAddress, assetID);
             if (withdrawingAmount > 0) return false;
@@ -867,7 +879,7 @@ namespace switcheo
         {
             if (!Runtime.CheckWitness(originator)) return false;
 
-            if (!VerifyWithdrawal(originator, assetID)) return false;
+            if (!VerifyWithdrawal(originator, assetID, amountToWithdraw)) return false;
 
             var info = new Map<string, BigInteger>();
             info["timestamp"] = Runtime.Time;
@@ -882,7 +894,7 @@ namespace switcheo
             return true;
         }
 
-        private static object ProcessWithdrawal()
+        private static object ProcessWithdrawal(BigInteger amount)
         {
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
@@ -896,8 +908,6 @@ namespace switcheo
 
             if (withdrawalStage == Mark)
             {
-                var amount = GetBalance(withdrawingAddr, assetID);
-
                 if (isWithdrawingNEP5)
                 {
                     if (amount > 0) Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
@@ -931,7 +941,7 @@ namespace switcheo
                     Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
                 }
 
-                var amount = GetWithdrawAmount(withdrawingAddr, assetID);
+                amount = GetWithdrawAmount(withdrawingAddr, assetID);
 
                 if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount))
                 {
@@ -955,7 +965,7 @@ namespace switcheo
 
             if (amount < 1) throw new Exception("Marking Less than 1");
 
-            if (!VerifyWithdrawal(address, assetID)) throw new Exception("Verify withdrawal failed");
+            if (!VerifyWithdrawal(address, assetID, amount)) throw new Exception("Verify withdrawal failed");
 
             if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal)) throw new Exception("Reduce balance for withdrawal failed");
 
