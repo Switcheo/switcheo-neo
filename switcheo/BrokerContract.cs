@@ -189,8 +189,8 @@ namespace switcheo
                 ulong totalOut = 0;
                 if (withdrawalStage == Mark)
                 {
-                    // Check that txn is signed
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: also allow if announced
+                    // Check that the transaction is signed by the coordinator
+                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: or pre-announced
 
                     // Check that withdrawal is possible
                     if (!VerifyWithdrawal(withdrawingAddr, assetID)) return false;
@@ -292,7 +292,6 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], (byte[])args[5]);
                     return MakeOffer(offer);
                 }
@@ -300,20 +299,17 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
                     return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
                 if (operation == "cancelOffer")
                 {
                     if (GetState() == Pending) return false;
                     if (args.Length != 2) return false;
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: or announced
                     return CancelOffer((byte[])args[0], (byte[])args[1]);
                 }
                 if (operation == "withdraw")
                 {
                     if (args.Length != 2) return false;
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: or announced
                     return ProcessWithdrawal();
                 }
 
@@ -517,6 +513,9 @@ namespace switcheo
             // Check that transaction is signed by the maker
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
+            // Check that transaction is signed by the coordinator
+            if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+
             // Check that nonce is not repeated
             var tradingPair = TradingPair(offer);
             var offerHash = Hash(offer);
@@ -552,6 +551,9 @@ namespace switcheo
 
             // Check that transaction is signed by the filler
             if (!Runtime.CheckWitness(fillerAddress)) return true;
+
+            // Check that transaction is signed by the coordinator
+            if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
 
             // Check that the offer still exists 
             Offer offer = GetOffer(tradingPair, offerHash);
@@ -657,8 +659,11 @@ namespace switcheo
             Offer offer = GetOffer(tradingPair, offerHash);
             if (offer.MakerAddress == Empty) return false;
 
-            // Check that transaction is signed by the canceller or Check that transaction is signed by coordinator if trading is frozen 
-            if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && Runtime.CheckWitness(GetCoordinatorAddress())))) return false;
+            // Check that the transaction is signed by the coordinator
+            if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false; // TODO: or pre-announced
+
+            // Check that transaction is signed by the canceller or trading is frozen 
+            if (!(Runtime.CheckWitness(offer.MakerAddress) || IsTradingFrozen())) return false;
 
             // Move funds to maker address
             IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
