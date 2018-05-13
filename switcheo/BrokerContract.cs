@@ -683,9 +683,9 @@ namespace switcheo
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             if (takerFeeAmount > 0)
             {
-                ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
                 if (useNativeTokens)
                 {
+                    ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
                     EmitFeesBurnt(feeAddress, offerHash, takerFeeAssetID, takerFeeAmount);
                 } else
                 {
