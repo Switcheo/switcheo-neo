@@ -334,7 +334,7 @@ namespace switcheo
                 if (operation == "withdraw")
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 2) return false;
+                    if (args.Length != 1) return false;
                     return ProcessWithdrawal((BigInteger) args[0]);
                 }
                 if (operation == "announceCancel")
