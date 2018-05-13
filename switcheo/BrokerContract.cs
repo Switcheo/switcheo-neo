@@ -56,7 +56,6 @@ namespace switcheo
 
         // Broker Settings & Hardcaps
         private static readonly byte[] Owner = "Ae6LkR5TLXVVAE5WSRqAEDEYBx6ChBE6Am".ToScriptHash();
-        private static readonly byte[] NativeToken = "AbwJtGDCcwoH2HhDmDq12ZcqFmUpCU3XMp".ToScriptHash(); // TODO: allow changing?
 
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
@@ -605,8 +604,7 @@ namespace switcheo
             bool useNativeTokens = takerFeeAssetID != offer.OfferAssetID;
 
             // Check that there is enough balance in native fees if using native fees
-            var fillerNativeTokenBalance = GetBalance(fillerAddress, NativeToken);
-            if (useNativeTokens && fillerNativeTokenBalance < takerFeeAmount)
+            if (useNativeTokens && GetBalance(fillerAddress, takerFeeAssetID) < takerFeeAmount)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, ReasonNotEnoughBalanceOnNativeToken);
                 return false;
