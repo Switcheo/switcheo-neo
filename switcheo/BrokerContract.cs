@@ -515,11 +515,11 @@ namespace switcheo
             }
 
             // Move asset to the taker balance and notify clients
-            var takerAmount = amountToTake - (nativeFee > 0 ? 0 : takerFee);
             if (offer.OfferAssetID == NativeToken)
             {
                 takerFee = takerFee / nativeTokenDiscount;
             }
+            var takerAmount = amountToTake - (nativeFee > 0 ? 0 : takerFee);
             TransferAssetTo(fillerAddress, offer.OfferAssetID, takerAmount);
             Transferred(fillerAddress, offer.OfferAssetID, takerAmount);
 
@@ -530,7 +530,7 @@ namespace switcheo
 
             // Move fees
             if (makerFee > 0) TransferAssetTo(feeAddress, offer.WantAssetID, makerFee);
-            if (nativeFee == 0) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
+            if (nativeFee == 0 && offer.OfferAssetID != NativeToken) TransferAssetTo(feeAddress, offer.OfferAssetID, takerFee);
 
             // Update native token exchange rate
             if (offer.OfferAssetID == NativeToken) AddVolume(offer.WantAssetID, amountToTake, amountToFill);
