@@ -1,4 +1,4 @@
-using Neo.SmartContract.Framework;
+﻿using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
 using Neo.SmartContract.Framework.Services.System;
 using System;
@@ -158,6 +158,12 @@ namespace switcheo
                 AvailableAmount = availableAmount.AsBigInteger(),
                 Nonce = nonce,
             };
+        }
+
+        private struct WithdrawInfo
+        {
+            public BigInteger TimeStamp;
+            public BigInteger Amount;
         }
 
         /// <summary>
@@ -880,12 +886,14 @@ namespace switcheo
 
             if (!VerifyWithdrawal(originator, assetID, amountToWithdraw)) return false;
 
-            var info = new Map<string, BigInteger>();
-            info["timestamp"] = Runtime.Time;
-            info["amount"] = amountToWithdraw;
+            WithdrawInfo withdrawInfo = new WithdrawInfo
+            {
+                TimeStamp = Runtime.Time,
+                Amount = amountToWithdraw
+            };
 
             var key = WithdrawAnnounceKey(originator, assetID);
-            Storage.Put(Context(), key, info.Serialize());
+            Storage.Put(Context(), key, withdrawInfo.Serialize());
 
             // Announce withdrawal intent to clients
             EmitWithdrawAnnounced(originator, assetID, amountToWithdraw);
@@ -1057,10 +1065,10 @@ namespace switcheo
         {
             var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
             if (announce.Length == 0) return false; // not announced
-            var announceInfo = (Map<string, BigInteger>)announce.Deserialize();
+            var announceInfo = (WithdrawInfo)announce.Deserialize();
             var announceDelay = GetAnnounceDelay();
 
-            return announceInfo["timestamp"] + announceDelay > Runtime.Time && announceInfo["amount"] == amount;
+            return announceInfo.TimeStamp + announceDelay > Runtime.Time && announceInfo.Amount == amount;
         }
 
         private static bool IsCancellationAnnounced(byte[] offerHash)
