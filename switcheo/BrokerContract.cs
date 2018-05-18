@@ -814,7 +814,7 @@ namespace switcheo
 
             if (newBalance > 0) Storage.Put(Context(), key, newBalance);
             else Storage.Delete(Context(), key);
-            // TODO: emit event in v2 EmitBalanceChanged(address, assetID, amount, reason);
+            EmitTransferred(address, assetID, -amount, reason);
 
             return true;
         }
