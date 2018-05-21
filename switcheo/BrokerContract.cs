@@ -655,7 +655,7 @@ namespace switcheo
             }
 
             // Calculate amount we have to give the offerer (what the offerer wants)
-            BigInteger amountToFill = (offer.OfferAmount * amountToTake) / offer.WantAmount;
+            BigInteger amountToFill = (offer.WantAmount * amountToTake) / offer.OfferAmount;
 
             // Check that amount to fill(give) is not less than 1
             if (amountToFill < 1)
