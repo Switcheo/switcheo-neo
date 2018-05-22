@@ -61,7 +61,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> Initialized;
 
         // Broker Settings & Hardcaps
-        private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
+        private static readonly byte[] Owner = "Ae6LkR5TLXVVAE5WSRqAEDEYBx6ChBE6Am".ToScriptHash();
         private static readonly ulong maxAnnounceDelay = 60 * 60 * 24 * 7; // 7 days
 
         // Contract States
