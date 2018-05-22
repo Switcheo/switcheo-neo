@@ -18,12 +18,6 @@ namespace switcheo
         [DisplayName("filled")]
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger, BigInteger> EmitFilled; // (address, offerHash, fillAmount, offerAssetID, offerAmount, wantAssetID, wantAmount, amountToTake)
 
-        [DisplayName("feesSent")]
-        public static event Action<byte[], byte[], byte[], BigInteger> EmitFeesSent; // (feeAddress, offerHash, assetID, amount);
-
-        [DisplayName("feesBurnt")]
-        public static event Action<byte[], byte[], byte[], BigInteger> EmitFeesBurnt; // (feeAddress, offerHash, assetID, amount);
-
         [DisplayName("failed")]
         public static event Action<byte[], byte[], BigInteger, byte[], BigInteger, byte[]> EmitFailed; // (address, offerHash, amountToTake, takerFeeAsssetID, takerFee, reason)
 
@@ -67,7 +61,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> Initialized;
 
         // Broker Settings & Hardcaps
-        private static readonly byte[] Owner = "Ae6LkR5TLXVVAE5WSRqAEDEYBx6ChBE6Am".ToScriptHash();
+        private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
         private static readonly ulong maxAnnounceDelay = 60 * 60 * 24 * 7; // 7 days
 
         // Contract States
@@ -655,7 +649,7 @@ namespace switcheo
             }
 
             // Calculate amount we have to give the offerer (what the offerer wants)
-            BigInteger amountToFill = (offer.OfferAmount * amountToTake) / offer.WantAmount;
+            BigInteger amountToFill = (amountToTake * offer.WantAmount) / offer.OfferAmount;
 
             // Check that amount to fill(give) is not less than 1
             if (amountToFill < 1)
@@ -683,7 +677,7 @@ namespace switcheo
             }
 
             // Check that the amountToTake is not more than 0.5% if not using native fees
-            if (!useNativeTokens && (takerFeeAmount * 1000 / amountToTake > 5))
+            if (!useNativeTokens && ((takerFeeAmount * 1000) / amountToTake > 5))
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFeesMoreThanLimit);
                 return false;
@@ -706,11 +700,9 @@ namespace switcheo
                 if (useNativeTokens)
                 {
                     ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
-                    EmitFeesBurnt(feeAddress, offerHash, takerFeeAssetID, takerFeeAmount);
                 } else
                 {
                     IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
-                    EmitFeesSent(feeAddress, offerHash, takerFeeAssetID, takerFeeAmount);
                 }
             }
 
