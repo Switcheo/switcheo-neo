@@ -901,19 +901,17 @@ namespace switcheo
             
             if (withdrawalStage == Mark)
             {
+                BigInteger amount;
                 if (isWithdrawingNEP5)
                 {
                     if (args.Length != 1) return false;
-                    var amount = (BigInteger)args[0];
-                    if (amount > 0) Storage.Put(Context(), WithdrawalKey(currentTxn.Hash), withdrawingAddr);
-                    return MarkWithdrawal(withdrawingAddr, assetID, amount);
+                    amount = (BigInteger)args[0];
                 }
                 else
                 {
-                    var amount = outputs[0].Value;
-                    Storage.Put(Context(), WithdrawalKey(currentTxn.Hash), withdrawingAddr);
-                    return MarkWithdrawal(withdrawingAddr, assetID, amount);
+                    amount = outputs[0].Value;
                 }
+                return MarkWithdrawal(currentTxn.Hash, withdrawingAddr, assetID, amount);
             }
             else if (withdrawalStage == Withdraw)
             {
@@ -935,23 +933,40 @@ namespace switcheo
             return false;
         }
 
-        private static bool MarkWithdrawal(byte[] address, byte[] assetID, BigInteger amount)
+        private static bool MarkWithdrawal(byte[] transactionHash, byte[] address, byte[] assetID, BigInteger amount)
         {
             bool withdrawalAnnounced = IsWithdrawalAnnounced(address, assetID, amount);
 
-            if (!Runtime.CheckWitness(GetCoordinatorAddress()) && !withdrawalAnnounced) throw new Exception("Coordinator witness missing or withdrawal unannounced");
+            if (!Runtime.CheckWitness(GetCoordinatorAddress()) && !withdrawalAnnounced)
+            {                
+                Runtime.Log("Coordinator witness missing or withdrawal unannounced");
+                return false;
+            }
 
-            if (amount < 1) throw new Exception("Marking Less than 1");
+            if (amount < 1)
+            {
+                Runtime.Log("Amount to mark withdrawal is less than 1");
+                return false;
+            }
 
-            if (!VerifyWithdrawal(address, assetID, amount)) throw new Exception("Verify withdrawal failed");
+            if (!VerifyWithdrawal(address, assetID, amount))
+            {
+                Runtime.Log("Verify withdrawal failed");
+                return false;
+            }
 
-            if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal)) throw new Exception("Reduce balance for withdrawal failed");
+            if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal))
+            {
+                Runtime.Log("Reduce balance for withdrawal failed");
+                return false;
+            }
 
             if (withdrawalAnnounced)
             {
                 Storage.Delete(Context(), WithdrawAnnounceKey(address, assetID));
             }
 
+            Storage.Put(Context(), WithdrawalKey(transactionHash), address);
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
             EmitWithdrawing(address, assetID, amount);
 
