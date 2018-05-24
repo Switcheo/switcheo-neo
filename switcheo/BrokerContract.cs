@@ -1056,17 +1056,6 @@ namespace switcheo
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
 
-        // Checks if there are any system assets received from this contract in this transaction
-        private static bool IsReceivingFromSelf(Transaction transaction)
-        {
-            var inputs = transaction.GetReferences();
-            foreach (var i in inputs)
-            {
-                if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return true;
-            }
-            return false;
-        }
-
         private static bool IsWithdrawalAnnounced(byte[] withdrawingAddr, byte[] assetID, BigInteger amount)
         {
             var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
