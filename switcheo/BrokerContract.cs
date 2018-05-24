@@ -72,10 +72,6 @@ namespace switcheo
         private static readonly byte[] Active = { 0x01 };     // all operations active
         private static readonly byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawal & owner actions
 
-        // Asset Categories
-        private static readonly byte[] SystemAsset = { 0x99 };
-        private static readonly byte[] NEP5 = { 0x98 };
-
         // Withdrawal Flags
         private static readonly byte[] Mark = { 0x50 };
         private static readonly byte[] Withdraw = { 0x51 };
@@ -96,7 +92,7 @@ namespace switcheo
         // Reason Code for balance changes
         private static readonly byte[] ReasonDeposit = { 0x01 }; // Balance increased due to deposit
         private static readonly byte[] ReasonMake = { 0x02 }; // Balance reduced due to maker making
-        private static readonly byte[] ReasonTakerFill = { 0x03 }; // Balance reduced due to taker filling maker's offered asset
+        private static readonly byte[] ReasonTake = { 0x03 }; // Balance reduced due to taker filling maker's offered asset
         private static readonly byte[] ReasonTakerFee = { 0x04 }; // Balance reduced due to taker fees
         private static readonly byte[] ReasonMakerFee = { 0x05 }; // Balance reduced due to maker fees
         private static readonly byte[] ReasonTakerReceive = { 0x06 }; // Balance increased due to taker receiving his cut in the trade
@@ -425,7 +421,7 @@ namespace switcheo
             return (Offer)offerData.Deserialize();
         }
 
-        private static Offer[] GetOffers(byte[] tradingPair, byte[] offset) // offerAssetID.Concat(wantAssetID)
+        private static Offer[] GetOffers(byte[] tradingPair, byte[] offset) // tradingPair ==> offerAssetID.Concat(wantAssetID)
         {
             var result = new Offer[50];
 
@@ -625,7 +621,7 @@ namespace switcheo
             }
 
             // Reduce balance from filler
-            ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFill);
+            ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTake);
 
             // Move filled asset to the maker balance
             IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
@@ -898,6 +894,8 @@ namespace switcheo
 
         private static object ProcessWithdrawal(object[] args)
         {
+            if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
             if (withdrawalStage == Empty) return false;
@@ -907,7 +905,7 @@ namespace switcheo
             var isWithdrawingNEP5 = assetID.Length == 20;
             var inputs = currentTxn.GetInputs();
             var outputs = currentTxn.GetOutputs();
-
+            
             if (withdrawalStage == Mark)
             {
                 if (args.Length != 1) return false;
@@ -941,8 +939,6 @@ namespace switcheo
             }
             else if (withdrawalStage == Withdraw)
             {
-                if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
-
                 foreach (var i in inputs)
                 {
                     Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
