@@ -228,6 +228,12 @@ namespace switcheo
                             }
                         }
                     }
+                    // Check script params to prevent denial-of-service by ensuring state is updated
+                    else
+                    {
+                        var invocationTransaction = (InvocationTransaction)currentTxn;
+                        if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
+                    }
 
                     // Check that inputs are not wasted (prevent denial-of-service by using additional inputs)
                     if (outputs.Length - inputs.Length > 1) return false;
@@ -254,7 +260,7 @@ namespace switcheo
                     var authorizedAmount = isWithdrawingNEP5 ? 1 : GetWithdrawAmount(withdrawingAddr, assetID);
                     if (totalOut != authorizedAmount) return false;
 
-                    // Check script params
+                    // Check script params to ensure state is updated
                     var invocationTransaction = (InvocationTransaction)currentTxn;
                     if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
                 }
