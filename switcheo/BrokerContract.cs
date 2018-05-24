@@ -219,9 +219,14 @@ namespace switcheo
                         if (inputs.Length > 1) return false;
                         if (outputs[0].Value > 1) return false;
 
-                        // Make user pay if this is not a trusted call (prevents denial-of-service through spamming after pre-announcement)
+                        // User withdrawal (pre-announced)
                         if (!trusted)
                         {
+                            // Check that transaction is signed by the user
+                            if (!Runtime.CheckWitness(withdrawingAddr)) return false;
+
+                            // Make user pay if this is not a trusted call - required as no arg check is performed
+                            // (prevents denial-of-service through spamming after pre-announcement)
                             foreach (var i in currentTxn.GetReferences())
                             {
                                 if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
