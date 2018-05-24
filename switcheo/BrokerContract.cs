@@ -120,10 +120,8 @@ namespace switcheo
         {
             public byte[] MakerAddress;
             public byte[] OfferAssetID;
-            public byte[] OfferAssetCategory;
             public BigInteger OfferAmount;
             public byte[] WantAssetID;
-            public byte[] WantAssetCategory;
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
             public byte[] Nonce;
@@ -137,19 +135,12 @@ namespace switcheo
             byte[] nonce
         )
         {
-            var offerAssetCategory = NEP5;
-            var wantAssetCategory = NEP5;
-            if (offerAssetID.Length == 32) offerAssetCategory = SystemAsset;
-            if (wantAssetID.Length == 32) wantAssetCategory = SystemAsset;
-
             return new Offer
             {
                 MakerAddress = makerAddress.Take(20),
                 OfferAssetID = offerAssetID,
-                OfferAssetCategory = offerAssetCategory,
                 OfferAmount = offerAmount.AsBigInteger(),
                 WantAssetID = wantAssetID,
-                WantAssetCategory = wantAssetCategory,
                 WantAmount = wantAmount.AsBigInteger(),
                 AvailableAmount = availableAmount.AsBigInteger(),
                 Nonce = nonce,
