@@ -87,7 +87,6 @@ namespace switcheo
         private static readonly byte[] NeoAssetID = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
         private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
-        private static readonly byte[] DepositArgs = { 0x00, 0xc1, 0x00 }; // PUSH0, PACK, PUSHBYTES0
 
         // Reason Code for balance changes
         private static readonly byte[] ReasonDeposit = { 0x01 }; // Balance increased due to deposit
@@ -803,12 +802,6 @@ namespace switcheo
             // Always pass immediately if this is step 1 of withdrawal which requires self-sending
             if (GetWithdrawalStage(currentTxn) == Mark) return true;
 
-            //  Do additional checks if depositing: Check that Application trigger will be tail called with the correct params
-            var invocationTransaction = (InvocationTransaction)currentTxn;
-            // Make sure it is an invocation
-            if (currentTxn.Type != Type_InvocationTransaction) return false;
-            // Make sure there is a deposit call with no arguments
-            if (invocationTransaction.Script != DepositArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
             return true;
         }
 
