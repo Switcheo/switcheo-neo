@@ -209,9 +209,13 @@ namespace switcheo
                     var amount = isWithdrawingNEP5 ? (BigInteger)args[0] : totalOut;
                     if (!VerifyWithdrawal(withdrawingAddr, assetID, amount)) return false;
 
-                    // Check that the transaction is signed by the coordinator or pre-announced
+                    // Check that the transaction is signed by the coordinator or pre-announced + signed by the user
                     var trusted = Runtime.CheckWitness(GetCoordinatorAddress());
-                    if (!trusted && !IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                    if (!trusted)
+                    {
+                        if (!Runtime.CheckWitness(withdrawingAddr)) return false;
+                        if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                    }
 
                     // Check that NEP5 withdrawals don't reserve more utxos than required
                     if (isWithdrawingNEP5)
@@ -219,19 +223,9 @@ namespace switcheo
                         if (inputs.Length > 1) return false;
                         if (outputs[0].Value > 1) return false;
 
-                        // User withdrawal (pre-announced)
-                        if (!trusted)
-                        {
-                            // Check that transaction is signed by the user
-                            if (!Runtime.CheckWitness(withdrawingAddr)) return false;
-
-                            // Make user pay if this is not a trusted call - required as no arg check is performed
-                            // (prevents denial-of-service through spamming after pre-announcement)
-                            foreach (var i in currentTxn.GetReferences())
-                            {
-                                if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
-                            }
-                        }
+                        // Make user pay if this is not a trusted call - required as no arg check is performed
+                        // (prevents denial-of-service through spamming after pre-announcement)
+                        if (!trusted && currentTxn.GetReferences()[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                     }
                     // Check script params to prevent denial-of-service by ensuring state is updated
                     else
