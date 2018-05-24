@@ -192,10 +192,7 @@ namespace switcheo
                 if (withdrawalStage == Mark)
                 {
                     // Check that inputs are not already reserved (We cannot use a utxo that is already reserved)
-                    foreach (var i in inputs)
-                    {
-                        if (Storage.Get(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex))).Length > 0) return false;
-                    }
+                    if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
 
                     // Check that outputs are a valid self-send (In marking phase, all assets from contract should be sent to contract and nothing should go anywhere else)
                     var authorizedAssetID = isWithdrawingNEP5 ? GasAssetID : assetID;
@@ -236,15 +233,13 @@ namespace switcheo
                     }
 
                     // Check that inputs are not wasted (prevent denial-of-service by using additional inputs)
-                    if (outputs.Length - inputs.Length > 1) return false;
+                    if (outputs.Length > 2) return false;
                 }
                 else if (withdrawalStage == Withdraw)
                 {
                     // Check that utxo has been reserved
-                    foreach (var i in inputs)
-                    {
-                        if (Storage.Get(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex))) != withdrawingAddr) return false;
-                    }
+                    if (inputs.Length > 1) return false;
+                    if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
 
                     // Check withdrawal destinations
                     var authorizedAssetID = isWithdrawingNEP5 ? GasAssetID : assetID;
@@ -894,7 +889,6 @@ namespace switcheo
         private static object ProcessWithdrawal(object[] args)
         {
             if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
-
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
             if (withdrawalStage == Empty) return false;
@@ -907,41 +901,23 @@ namespace switcheo
             
             if (withdrawalStage == Mark)
             {
-                if (args.Length != 1) return false;
-                var amount = (BigInteger)args[0];
-
                 if (isWithdrawingNEP5)
                 {
-                    if (amount > 0) Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(0)), withdrawingAddr);
+                    if (args.Length != 1) return false;
+                    var amount = (BigInteger)args[0];
+                    if (amount > 0) Storage.Put(Context(), WithdrawalKey(currentTxn.Hash), withdrawingAddr);
+                    return MarkWithdrawal(withdrawingAddr, assetID, amount);
                 }
                 else
                 {
-                    if (assetID == NeoAssetID)
-                    {
-                        // neo must be rounded down
-                        const ulong neoAssetFactor = 100000000;
-                        amount = amount / neoAssetFactor * neoAssetFactor;
-                    }
-                    ulong sum = 0;
-                    for (ushort index = 0; index < outputs.Length; index++)
-                    {
-                        var value = (ulong)outputs[index].Value;
-                        if (sum + value > amount) break;
-
-                        Storage.Put(Context(), currentTxn.Hash.Concat(IndexAsByteArray(index)), withdrawingAddr);
-                        sum += value;
-                    }
-                    amount = sum;
+                    var amount = outputs[0].Value;
+                    Storage.Put(Context(), WithdrawalKey(currentTxn.Hash), withdrawingAddr);
+                    return MarkWithdrawal(withdrawingAddr, assetID, amount);
                 }
-
-                return MarkWithdrawal(withdrawingAddr, assetID, amount);
             }
             else if (withdrawalStage == Withdraw)
             {
-                foreach (var i in inputs)
-                {
-                    Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
-                }
+                Storage.Delete(Context(), WithdrawalKey(inputs[0].PrevHash));
 
                 var amount = GetWithdrawAmount(withdrawingAddr, assetID);
 
@@ -1038,7 +1014,6 @@ namespace switcheo
         // Helpers
         private static StorageContext Context() => Storage.CurrentContext;
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
-        private static byte[] IndexAsByteArray(ushort index) => index > 0 ? ((BigInteger)index).AsByteArray() : Empty;
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
 
@@ -1075,6 +1050,7 @@ namespace switcheo
 
         // Keys
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => "balance".AsByteArray().Concat(originator).Concat(assetID);
+        private static byte[] WithdrawalKey(byte[] transactionHash) => "withdrawalUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
