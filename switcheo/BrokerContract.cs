@@ -183,6 +183,7 @@ namespace switcheo
                 var isWithdrawingNEP5 = assetID.Length == 20;
                 var inputs = currentTxn.GetInputs();
                 var outputs = currentTxn.GetOutputs();
+                var references = currentTxn.GetReferences();
 
                 // Check that Application trigger will be tail called with the correct params
                 if (currentTxn.Type != Type_InvocationTransaction) return false;
@@ -225,7 +226,7 @@ namespace switcheo
 
                         // Make user pay if this is not a trusted call - required as no arg check is performed
                         // (prevents denial-of-service through spamming after pre-announcement)
-                        if (!trusted && currentTxn.GetReferences()[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        if (!trusted && references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                     }
                     // Check script params to prevent denial-of-service by ensuring state is updated
                     else
@@ -270,7 +271,7 @@ namespace switcheo
 
                 // Ensure that nothing is burnt
                 ulong totalIn = 0;
-                foreach (var i in currentTxn.GetReferences()) totalIn += (ulong)i.Value;
+                foreach (var i in references) totalIn += (ulong)i.Value;
                 if (totalIn != totalOut) return false;
 
                 return true;
