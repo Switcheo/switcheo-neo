@@ -42,9 +42,6 @@ namespace switcheo
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger> EmitWithdrawn; // (address, assetID, amount)
 
-        [DisplayName("coordinatorSet")]
-        public static event Action<byte[]> EmitCoordinatorSet; // (address)
-
         [DisplayName("tradingFrozen")]
         public static event Action EmitTradingFrozen;
 
@@ -54,8 +51,14 @@ namespace switcheo
         [DisplayName("addedToWhitelist")]
         public static event Action<byte[]> EmitAddedTowWhitelist; // (scriptHash)
 
+        [DisplayName("removedFromWhitelist")]
+        public static event Action<byte[]> EmitRemovedFromWhitelist; // (scriptHash)
+
         [DisplayName("whitelistDestroyed")]
         public static event Action EmitWhitelistDestroyed;
+
+        [DisplayName("coordinatorSet")]
+        public static event Action<byte[]> EmitCoordinatorSet; // (address)
 
         [DisplayName("initialized")]
         public static event Action<byte[], byte[], BigInteger> Initialized;
@@ -67,7 +70,7 @@ namespace switcheo
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
         private static readonly byte[] Active = { 0x01 };     // all operations active
-        private static readonly byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawl & owner actions
+        private static readonly byte[] Inactive = { 0x02 };   // trading halted - only can do cancel, withdrawal & owner actions
 
         // Asset Categories
         private static readonly byte[] SystemAsset = { 0x99 };
@@ -112,10 +115,6 @@ namespace switcheo
         private static readonly byte[] ReasonNotEnoughBalanceOnFiller = { 0x26 }; // Not enough balance to give (wantAssetID) for what you want to take (offerAssetID)
         private static readonly byte[] ReasonNotEnoughBalanceOnNativeToken = { 0x27 }; // Not enough balance in native tokens to use
         private static readonly byte[] ReasonFeesMoreThanLimit = { 0x28 }; // Fees exceed 0.5%
-
-        // True / False as byte array
-        private static readonly byte[] True = { 0x01 };
-        private static readonly byte[] False = { 0x00 };
 
         private struct Offer
         {
@@ -403,65 +402,6 @@ namespace switcheo
             return true;
         }
 
-        /*********
-         * NEP-7 *
-         ********/
-
-        // Called by VerificationR
-        public static bool Receiving()
-        {
-            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-
-            // Always pass if receiving any system assets from this contract (Currently this is assumed to only happen in system asset withdrawals)
-            if (IsReceivingFromSelf(currentTxn)) return true;
-
-            // If there are no withdrawals: Do additional checks if depositing: Check that Application trigger will be tail called with the correct params
-            var invocationTransaction = (InvocationTransaction)currentTxn;
-            // Make sure it is an invocation
-            if (currentTxn.Type != Type_InvocationTransaction) return false;
-            // Make sure there is a deposit call with no arguments
-            if (invocationTransaction.Script != DepositArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
-            return true;
-        }
-
-        // Called by ApplicationR
-        public static bool Received()
-        {
-            // Check the current transaction for the system assets
-            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-            var outputs = currentTxn.GetOutputs();
-
-            // Check for double deposits
-            if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 1) return false;
-
-            // if there is input from the contract it is a Withdrawal and we won't deposit anything
-            if (IsReceivingFromSelf(currentTxn)) return false;
-
-            // Only deposit those assets not from contract
-            ulong sentGasAmount = 0;
-            ulong sentNeoAmount = 0;
-            
-            foreach (var o in outputs)
-            {
-                if (o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
-                {
-                    if (o.AssetId == GasAssetID)
-                    {
-                        sentGasAmount += (ulong)o.Value;
-                    }
-                    else if (o.AssetId == NeoAssetID)
-                    {
-                        sentNeoAmount += (ulong)o.Value;
-                    }
-                }
-            }
-            byte[] firstAvailableAddress = currentTxn.GetReferences()[0].ScriptHash;
-            if (sentGasAmount > 0) IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
-            if (sentNeoAmount > 0) IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
-
-            return true;
-        }
-
         /***********
          * Getters *
          ***********/
@@ -563,8 +503,18 @@ namespace switcheo
         private static bool AddToWhitelist(byte[] scriptHash)
         {
             if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return false;
+            if (scriptHash.Length != 20) return false;
             Storage.Put(Context(), WhitelistKey(scriptHash), "1");
             EmitAddedTowWhitelist(scriptHash);
+            return true;
+        }
+
+        private static bool RemoveFromWhitelist(byte[] scriptHash)
+        {
+            if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return false;
+            if (scriptHash.Length != 20) return false;
+            Storage.Delete(Context(), WhitelistKey(scriptHash));
+            EmitRemovedFromWhitelist(scriptHash);
             return true;
         }
 
@@ -854,6 +804,65 @@ namespace switcheo
             return false;
         }
 
+        /********************
+         * Receive Triggers *
+         ********************/
+
+        // Receiving system asset directly
+        public static bool Receiving()
+        {
+            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+
+            // Always pass immediately if this is step 1 of withdrawal which requires self-sending
+            if (GetWithdrawalStage(currentTxn) == Mark) return true;
+
+            //  Do additional checks if depositing: Check that Application trigger will be tail called with the correct params
+            var invocationTransaction = (InvocationTransaction)currentTxn;
+            // Make sure it is an invocation
+            if (currentTxn.Type != Type_InvocationTransaction) return false;
+            // Make sure there is a deposit call with no arguments
+            if (invocationTransaction.Script != DepositArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
+            return true;
+        }
+
+        // Received system asset
+        public static bool Received()
+        {
+            // Check the current transaction for the system assets
+            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            var outputs = currentTxn.GetOutputs();
+
+            // Check for double deposits
+            if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 1) return false;
+
+            // Don't deposit if this is withdrawal stage 1 (self-send)
+            if (GetWithdrawalStage(currentTxn) == Mark) return false;
+
+            // Only deposit those assets not from contract
+            ulong sentGasAmount = 0;
+            ulong sentNeoAmount = 0;
+
+            foreach (var o in outputs)
+            {
+                if (o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                {
+                    if (o.AssetId == GasAssetID)
+                    {
+                        sentGasAmount += (ulong)o.Value;
+                    }
+                    else if (o.AssetId == NeoAssetID)
+                    {
+                        sentNeoAmount += (ulong)o.Value;
+                    }
+                }
+            }
+            byte[] firstAvailableAddress = currentTxn.GetReferences()[0].ScriptHash;
+            if (sentGasAmount > 0) IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
+            if (sentNeoAmount > 0) IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
+
+            return true;
+        }
+
         /**************
          * Withdrawal *
          **************/
@@ -941,6 +950,8 @@ namespace switcheo
             }
             else if (withdrawalStage == Withdraw)
             {
+                if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+
                 foreach (var i in inputs)
                 {
                     Storage.Delete(Context(), i.PrevHash.Concat(IndexAsByteArray(i.PrevIndex)));
