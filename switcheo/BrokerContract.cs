@@ -1054,7 +1054,7 @@ namespace switcheo
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
         private static byte[] IndexAsByteArray(ushort index) => index > 0 ? ((BigInteger)index).AsByteArray() : Empty;
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
-        private static bool IsTradingFrozen() => Storage.Get(Context(), "stateContractWhitelist") == Inactive;
+        private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
 
         // Checks if there are any system assets received from this contract in this transaction
         private static bool IsReceivingFromSelf(Transaction transaction)
