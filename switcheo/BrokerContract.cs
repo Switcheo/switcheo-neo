@@ -192,7 +192,10 @@ namespace switcheo
                 if (withdrawalStage == Mark)
                 {
                     // Check that inputs are not already reserved (We cannot use a utxo that is already reserved)
-                    if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
+                    foreach (var i in inputs)
+                    {
+                        if (Storage.Get(Context(), WithdrawalKey(i.PrevHash)).Length > 0) return false;
+                    }
 
                     // Check that outputs are a valid self-send (In marking phase, all assets from contract should be sent to contract and nothing should go anywhere else)
                     var authorizedAssetID = isWithdrawingNEP5 ? GasAssetID : assetID;
