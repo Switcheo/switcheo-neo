@@ -81,6 +81,7 @@ namespace switcheo
         private static readonly byte TAUsage_NEP5AssetID = 0xa2;
         private static readonly byte TAUsage_SystemAssetID = 0xa3;
         private static readonly byte TAUsage_WithdrawalAddress = 0xa4;
+        private static readonly byte TAUsage_WithdrawalAmount = 0xa5;
 
         // Byte Constants
         private static readonly byte[] Empty = { };
@@ -185,9 +186,6 @@ namespace switcheo
                 var outputs = currentTxn.GetOutputs();
                 var references = currentTxn.GetReferences();
 
-                // Check that Application trigger will be tail called with the correct params
-                if (currentTxn.Type != Type_InvocationTransaction) return false;
-
                 ulong totalOut = 0;
                 if (withdrawalStage == Mark)
                 {
@@ -207,12 +205,11 @@ namespace switcheo
                     }
 
                     // Check that withdrawal is possible (Enough balance and nothing reserved for withdrawing. Only 1 withdraw can happen at a time)
-                    var amount = isWithdrawingNEP5 ? (BigInteger)args[0] : totalOut;
+                    var amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : totalOut;
                     if (!VerifyWithdrawal(withdrawingAddr, assetID, amount)) return false;
 
                     // Check that the transaction is signed by the coordinator or pre-announced + signed by the user
-                    var trusted = Runtime.CheckWitness(GetCoordinatorAddress());
-                    if (!trusted)
+                    if (!Runtime.CheckWitness(GetCoordinatorAddress()))
                     {
                         if (!Runtime.CheckWitness(withdrawingAddr)) return false;
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
@@ -223,16 +220,6 @@ namespace switcheo
                     {
                         if (inputs.Length > 1) return false;
                         if (outputs[0].Value > 1) return false;
-
-                        // Make user pay if this is not a trusted call - required as no arg check is performed
-                        // (prevents denial-of-service through spamming after pre-announcement)
-                        if (!trusted && references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
-                    }
-                    // Check script params to prevent denial-of-service by ensuring state is updated
-                    else
-                    {
-                        var invocationTransaction = (InvocationTransaction)currentTxn;
-                        if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
                     }
 
                     // Check that inputs are not wasted (prevent denial-of-service by using additional inputs)
@@ -256,16 +243,16 @@ namespace switcheo
 
                     // Check withdrawal amount
                     var authorizedAmount = isWithdrawingNEP5 ? 1 : GetWithdrawAmount(withdrawingAddr, assetID);
-                    if (totalOut != authorizedAmount) return false;
-
-                    // Check script params to ensure state is updated
-                    var invocationTransaction = (InvocationTransaction)currentTxn;
-                    if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
                 }
                 else
                 {
                     return false;
                 }
+
+                // Check that Application trigger will be tail called with the correct params
+                if (currentTxn.Type != Type_InvocationTransaction) return false;
+                var invocationTransaction = (InvocationTransaction)currentTxn;
+                if (invocationTransaction.Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
 
                 // Ensure that nothing is burnt
                 ulong totalIn = 0;
@@ -907,8 +894,7 @@ namespace switcheo
                 BigInteger amount;
                 if (isWithdrawingNEP5)
                 {
-                    if (args.Length != 1) return false;
-                    amount = (BigInteger)args[0];
+                    amount = GetWithdrawalAmount(currentTxn);
                 }
                 else
                 {
@@ -1017,6 +1003,16 @@ namespace switcheo
                 if (attr.Usage == TAUsage_SystemAssetID) return attr.Data;
             }
             return Empty;
+        }
+
+        private static BigInteger GetWithdrawalAmount(Transaction transaction)
+        {
+            var txnAttributes = transaction.GetAttributes();
+            foreach (var attr in txnAttributes)
+            {
+                if (attr.Usage == TAUsage_WithdrawalAmount) return attr.Data.AsBigInteger();
+            }
+            return 0;
         }
 
         private static byte[] GetWithdrawalStage(Transaction transaction)
