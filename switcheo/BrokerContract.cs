@@ -94,13 +94,11 @@ namespace switcheo
         private static readonly byte[] ReasonMake = { 0x02 }; // Balance reduced due to maker making
         private static readonly byte[] ReasonTake = { 0x03 }; // Balance reduced due to taker filling maker's offered asset
         private static readonly byte[] ReasonTakerFee = { 0x04 }; // Balance reduced due to taker fees
-        private static readonly byte[] ReasonMakerFee = { 0x05 }; // Balance reduced due to maker fees
-        private static readonly byte[] ReasonTakerReceive = { 0x06 }; // Balance increased due to taker receiving his cut in the trade
-        private static readonly byte[] ReasonMakerReceive = { 0x07 }; // Balance increased due to maker receiving his cut in the trade
-        private static readonly byte[] ReasonContractMakerFee = { 0x08 }; // Balance increased on fee address due to contract receiving maker fee
-        private static readonly byte[] ReasonContractTakerFee = { 0x09 }; // Balance increased on fee address due to contract receiving taker fee
-        private static readonly byte[] ReasonCancel = { 0x0a }; // Balance increased due to cancelling offer
-        private static readonly byte[] ReasonPrepareWithdrawal = { 0x0b }; // Balance reduced due to preparing for asset withdrawal
+        private static readonly byte[] ReasonTakerReceive = { 0x05 }; // Balance increased due to taker receiving his cut in the trade
+        private static readonly byte[] ReasonMakerReceive = { 0x06 }; // Balance increased due to maker receiving his cut in the trade
+        private static readonly byte[] ReasonContractTakerFee = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
+        private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
+        private static readonly byte[] ReasonPrepareWithdrawal = { 0x09 }; // Balance reduced due to preparing for asset withdrawal
 
         // Reason Code for fill failures
         private static readonly byte[] ReasonOfferNotExist = { 0x21 }; // Empty Offer when trying to fill
