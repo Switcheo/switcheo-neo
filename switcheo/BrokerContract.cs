@@ -950,12 +950,6 @@ namespace switcheo
                 return false;
             }
 
-            if (amount < 1)
-            {
-                Runtime.Log("Amount to mark withdrawal is less than 1");
-                return false;
-            }
-
             if (!VerifyWithdrawal(address, assetID, amount))
             {
                 Runtime.Log("Verify withdrawal failed");
