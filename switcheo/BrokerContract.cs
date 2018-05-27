@@ -54,8 +54,8 @@ namespace switcheo
         [DisplayName("removedFromWhitelist")]
         public static event Action<byte[]> EmitRemovedFromWhitelist; // (scriptHash)
 
-        [DisplayName("whitelistDestroyed")]
-        public static event Action EmitWhitelistDestroyed;
+        [DisplayName("nep8ActiveSet")]
+        public static event Action EmitNEP8ActiveSet;
 
         [DisplayName("coordinatorSet")]
         public static event Action<byte[]> EmitCoordinatorSet; // (address)
@@ -187,19 +187,10 @@ namespace switcheo
                 ulong totalOut = 0;
                 if (withdrawalStage == Mark)
                 {
-                    // Check that inputs are not already reserved (We cannot use a utxo that is already reserved)
+                    // Check that inputs are not already reserved (We must not re-use a utxo that is already reserved)
                     foreach (var i in inputs)
                     {
                         if (Storage.Get(Context(), WithdrawalKey(i.PrevHash)).Length > 0) return false;
-                    }
-
-                    // Check that outputs are a valid self-send (In marking phase, all assets from contract should be sent to contract and nothing should go anywhere else)
-                    var authorizedAssetID = isWithdrawingNEP5 ? GasAssetID : assetID;
-                    foreach (var o in outputs)
-                    {
-                        totalOut += (ulong)o.Value;
-                        if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
-                        if (o.AssetId != authorizedAssetID) return false;
                     }
 
                     // Check that withdrawal is possible (Enough balance and nothing reserved for withdrawing. Only 1 withdraw can happen at a time)
@@ -213,15 +204,29 @@ namespace switcheo
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
                     }
 
-                    // Check that NEP5 withdrawals don't reserve more utxos than required
+                    // Check inputs and outputs
                     if (isWithdrawingNEP5)
                     {
-                        if (inputs.Length > 1) return false;
-                        if (outputs[0].Value > 1) return false;
+                        // Check that NEP5 withdrawals don't use contract assets
+                        foreach (var i in references)
+                        {
+                            if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        }
+                    }
+                    else
+                    {
+                        // Check that outputs are a valid self-send for system asset withdrawals
+                        // (In marking phase, all assets from contract should be sent to contract and nothing should go anywhere else)
+                        foreach (var o in outputs)
+                        {
+                            totalOut += (ulong)o.Value;
+                            if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
+                            if (o.AssetId != assetID) return false;
+                        }
                     }
 
                     // Check that inputs are not wasted (prevent denial-of-service by using additional inputs)
-                    if (outputs.Length > 2) return false;
+                    if (inputs.Length > 2) return false;
                 }
                 else if (withdrawalStage == Withdraw)
                 {
@@ -229,18 +234,24 @@ namespace switcheo
                     if (inputs.Length > 1) return false;
                     if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
 
-                    // Check withdrawal destinations
-                    var authorizedAssetID = isWithdrawingNEP5 ? GasAssetID : assetID;
-                    var authorizedAddress = isWithdrawingNEP5 ? ExecutionEngine.ExecutingScriptHash : withdrawingAddr;
-                    foreach (var o in outputs)
+                    if (isWithdrawingNEP5)
                     {
-                        totalOut += (ulong)o.Value;
-                        if (o.AssetId != authorizedAssetID) return false;
-                        if (o.ScriptHash != authorizedAddress) return false;
+                        // Check that NEP5 withdrawals don't use contract assets
+                        foreach (var i in references)
+                        {
+                            if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        }
+                        // Check for whitelist if we are doing old style NEP-5 transfers
+                        // New style NEP-5 transfers SHOULD NOT require contract verification / witness
+                        if (!VerifyContract(assetID)) return false;
                     }
-
-                    // Check withdrawal amount
-                    var authorizedAmount = isWithdrawingNEP5 ? 1 : GetWithdrawAmount(withdrawingAddr, assetID);
+                    else
+                    {
+                        // Check withdrawal destination and amount
+                        if (outputs.Length > 1) return false;
+                        if (outputs[0].AssetId != assetID) return false;
+                        if (outputs[0].ScriptHash != withdrawingAddr) return false;
+                    }
                 }
                 else
                 {
@@ -366,10 +377,15 @@ namespace switcheo
                     if (args.Length != 1) return false;
                     return AddToWhitelist((byte[]) args[0]);
                 }
-                if (operation == "destroyWhitelist")
+                if (operation == "removeFromWhitelist")
                 {
-                    Storage.Put(Context(), "stateContractWhitelist", Inactive);
-                    EmitWhitelistDestroyed();
+                    if (args.Length != 1) return false;
+                    return RemoveFromWhitelist((byte[])args[0]);
+                }
+                if (operation == "setNEP8Active")
+                {
+                    Storage.Put(Context(), "nep8status", Active);
+                    EmitNEP8ActiveSet();
                     return true;
                 }
             }
@@ -477,7 +493,6 @@ namespace switcheo
 
         private static bool AddToWhitelist(byte[] scriptHash)
         {
-            if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return false;
             if (scriptHash.Length != 20) return false;
             Storage.Put(Context(), WhitelistKey(scriptHash), "1");
             EmitAddedTowWhitelist(scriptHash);
@@ -486,7 +501,6 @@ namespace switcheo
 
         private static bool RemoveFromWhitelist(byte[] scriptHash)
         {
-            if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return false;
             if (scriptHash.Length != 20) return false;
             Storage.Delete(Context(), WhitelistKey(scriptHash));
             EmitRemovedFromWhitelist(scriptHash);
@@ -847,12 +861,6 @@ namespace switcheo
             return true;
         }
 
-        private static bool VerifyContract(byte[] assetID)
-        {
-            if (Storage.Get(Context(), "stateContractWhitelist") == Inactive) return true;
-            return Storage.Get(Context(), WhitelistKey(assetID)).Length > 0;
-        }
-
         private static bool AnnounceWithdraw(byte[] originator, byte[] assetID, BigInteger amountToWithdraw)
         {
             if (!Runtime.CheckWitness(originator)) return false;
@@ -876,40 +884,48 @@ namespace switcheo
 
         private static object ProcessWithdrawal(object[] args)
         {
-            if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
             if (withdrawalStage == Empty) return false;
 
             var withdrawingAddr = GetWithdrawalAddress(currentTxn);
+            if (withdrawingAddr == Empty) return false;
+
             var assetID = GetWithdrawalAsset(currentTxn);
+            if (assetID == Empty) return false;
+
             var isWithdrawingNEP5 = assetID.Length == 20;
             var inputs = currentTxn.GetInputs();
             var outputs = currentTxn.GetOutputs();
             
             if (withdrawalStage == Mark)
             {
-                BigInteger amount;
-                if (isWithdrawingNEP5)
-                {
-                    amount = GetWithdrawalAmount(currentTxn);
-                }
-                else
-                {
-                    amount = outputs[0].Value;
-                }
+                if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                BigInteger amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : outputs[0].Value;
                 return MarkWithdrawal(currentTxn.Hash, withdrawingAddr, assetID, amount);
             }
             else if (withdrawalStage == Withdraw)
             {
-                Storage.Delete(Context(), WithdrawalKey(inputs[0].PrevHash));
+                var key = WithdrawalKey(inputs[0].PrevHash);
+                if (Storage.Get(Context(), key) != withdrawingAddr) return false;
+
+                Storage.Delete(Context(), key);
 
                 var amount = GetWithdrawAmount(withdrawingAddr, assetID);
 
-                if (isWithdrawingNEP5 && !WithdrawNEP5(withdrawingAddr, assetID, amount))
+                if (isWithdrawingNEP5)
                 {
-                    Runtime.Log("Withdrawing NEP-5 but failed!");
-                    return false;
+                    if (!VerifyContract(assetID))
+                    {
+                        // New-style non-whitelisted NEP-5 transfers MUST NOT pass contract witness checks
+                        if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                        if (!IsNEP8Active()) return false;
+                    }
+                    if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
+                    {
+                        Runtime.Log("Tried to withdraw NEP-5 but failed!");
+                        return false;
+                    }
                 }
 
                 Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
@@ -963,7 +979,6 @@ namespace switcheo
         private static bool WithdrawNEP5(byte[] address, byte[] assetID, BigInteger amount)
         {
             // Transfer token
-            if (!VerifyContract(assetID)) return false;
             var args = new object[] { ExecutionEngine.ExecutingScriptHash, address, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
             bool transferSuccessful = (bool)contract("transfer", args);
@@ -1028,6 +1043,7 @@ namespace switcheo
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
+        private static bool IsNEP8Active() => Storage.Get(Context(), "nep8status") == Active;
 
         private static bool IsWithdrawalAnnounced(byte[] withdrawingAddr, byte[] assetID, BigInteger amount)
         {
@@ -1046,6 +1062,12 @@ namespace switcheo
             var announceDelay = GetAnnounceDelay();
 
             return announceTime.AsBigInteger() + announceDelay > Runtime.Time;
+        }
+
+        private static bool VerifyContract(byte[] assetID)
+        {
+            if (assetID.AsBigInteger() == 0) return false;
+            return Storage.Get(Context(), WhitelistKey(assetID)).Length > 0;
         }
 
         // Unique hash for an offer
