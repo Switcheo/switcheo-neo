@@ -774,7 +774,7 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Check whitelist
-                if (!VerifyContract(assetID)) return false;
+                if (!VerifyContract(assetID) && !IsNEP8Active()) return false;
 
                 // Just transfer immediately
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
@@ -852,6 +852,10 @@ namespace switcheo
 
         private static bool VerifyWithdrawal(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
+            if (holderAddress.Length != 20) return false;
+            if (assetID.Length != 20 && assetID.Length != 32) return false;
+            if (amount < 1) return false;
+
             var balance = GetBalance(holderAddress, assetID);
             if (balance < amount) return false;
 
