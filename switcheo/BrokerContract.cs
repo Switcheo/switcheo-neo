@@ -969,7 +969,7 @@ namespace switcheo
 
             Storage.Put(Context(), WithdrawalKey(transactionHash), address);
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
-            EmitWithdrawing(address, assetID, amount);
+            EmitWithdrawing(address, assetID, amount.AsByteArray().AsBigInteger());
 
             return true;
         }
