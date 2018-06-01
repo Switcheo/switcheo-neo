@@ -40,7 +40,7 @@ namespace switcheo
         public static event Action<byte[], byte[], BigInteger> EmitWithdrawing; // (address, assetID, amount)
 
         [DisplayName("withdrawn")]
-        public static event Action<byte[], byte[], BigInteger> EmitWithdrawn; // (address, assetID, amount)
+        public static event Action<byte[], byte[], BigInteger, byte[]> EmitWithdrawn; // (address, assetID, amount, utxoUsed)
 
         [DisplayName("tradingFrozen")]
         public static event Action EmitTradingFrozen;
@@ -747,6 +747,10 @@ namespace switcheo
             {
                 RemoveOffer(tradingPair, offerHash);
             }
+            else if (offer.AvailableAmount < 0)
+            {
+                throw new Exception("Invalid offer available amount!");
+            }
             // Store offer otherwise
             else
             {
@@ -969,7 +973,7 @@ namespace switcheo
                 }
 
                 Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
-                EmitWithdrawn(withdrawingAddr, assetID, amount);
+                EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                 return true;
             }
 
