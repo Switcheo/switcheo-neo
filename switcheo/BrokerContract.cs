@@ -54,9 +54,6 @@ namespace switcheo
         [DisplayName("removedFromWhitelist")]
         public static event Action<byte[]> EmitRemovedFromWhitelist; // (scriptHash)
 
-        [DisplayName("nep8ActiveSet")]
-        public static event Action EmitNEP8ActiveSet;
-
         [DisplayName("feeAddressSet")]
         public static event Action<byte[]> EmitFeeAddressSet; // (address)
 
@@ -398,12 +395,6 @@ namespace switcheo
                 {
                     if (args.Length != 1) return false;
                     return RemoveFromWhitelist((byte[])args[0]);
-                }
-                if (operation == "setNEP8Active")
-                {
-                    Storage.Put(Context(), "nep8status", Active);
-                    EmitNEP8ActiveSet();
-                    return true;
                 }
             }
 
@@ -810,7 +801,7 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Check whitelist
-                if (!VerifyContract(assetID) && !IsNEP8Active()) return false;
+                if (!VerifyContract(assetID)) return false;
 
                 // Just transfer immediately
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
@@ -959,7 +950,6 @@ namespace switcheo
                     {
                         // New-style non-whitelisted NEP-5 transfers MUST NOT pass contract witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
-                        if (!IsNEP8Active()) return false;
                     }
                     if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
                     {
@@ -1077,7 +1067,6 @@ namespace switcheo
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
-        private static bool IsNEP8Active() => Storage.Get(Context(), "nep8status") == Active;
 
         private static bool IsWithdrawalAnnounced(byte[] withdrawingAddr, byte[] assetID, BigInteger amount)
         {
