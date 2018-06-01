@@ -57,11 +57,20 @@ namespace switcheo
         [DisplayName("nep8ActiveSet")]
         public static event Action EmitNEP8ActiveSet;
 
+        [DisplayName("feeAddressSet")]
+        public static event Action<byte[]> EmitFeeAddressSet; // (address)
+
         [DisplayName("coordinatorSet")]
         public static event Action<byte[]> EmitCoordinatorSet; // (address)
 
+        [DisplayName("withdrawerSet")]
+        public static event Action<byte[]> EmitWithdrawerSet; // (address)
+
+        [DisplayName("announceDelaySet")]
+        public static event Action<BigInteger> EmitAnnounceDelaySet; // (delay)
+
         [DisplayName("initialized")]
-        public static event Action<byte[], byte[], BigInteger> Initialized;
+        public static event Action Initialized;
 
         // Broker Settings & Hardcaps
         private static readonly byte[] Owner = "AHDfSLZANnJ4N9Rj3FCokP14jceu3u7Bvw".ToScriptHash();
@@ -85,6 +94,7 @@ namespace switcheo
 
         // Byte Constants
         private static readonly byte[] Empty = { };
+        private static readonly byte[] Zero = { 0x00 };
         private static readonly byte[] NeoAssetID = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
         private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
@@ -203,8 +213,8 @@ namespace switcheo
                     var amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : outputs[0].Value;
                     if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount)) return false;
 
-                    // Check that the transaction is signed by the coordinator or pre-announced + signed by the user
-                    if (!Runtime.CheckWitness(GetCoordinatorAddress()))
+                    // Check that the transaction is signed by the withdrawer SC or pre-announced + signed by the user
+                    if (!Runtime.CheckWitness(GetWithdrawerAddress()))
                     {
                         if (!Runtime.CheckWitness(withdrawingAddr)) return false;
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
@@ -281,7 +291,7 @@ namespace switcheo
                         return false;
                     }
                     if (args.Length != 2) return false;
-                    return Initialize((byte[])args[0], (byte[])args[1]);
+                    return Initialize((byte[])args[0], (byte[])args[1], (byte[])args[2]);
                 }
 
                 // == Getters ==
@@ -289,7 +299,9 @@ namespace switcheo
                 if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
                 if (operation == "getOffer") return GetOffer((byte[])args[0], (byte[])args[1]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
+                if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
+                if (operation == "getWithdrawerAddress") return GetWithdrawerAddress();
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
 
                 // == Execute == 
@@ -367,6 +379,11 @@ namespace switcheo
                     if (args.Length != 1) return false;
                     return SetCoordinatorAddress((byte[])args[0]); ;
                 }
+                if (operation == "setWithdrawerAddress")
+                {
+                    if (args.Length != 1) return false;
+                    return SetWithdrawerAddress((byte[])args[0]); ;
+                }
                 if (operation == "setFeeAddress")
                 {
                     if (args.Length != 1) return false;
@@ -412,9 +429,19 @@ namespace switcheo
             return Storage.Get(Context(), "announceDelay").AsBigInteger();
         }
 
+        private static byte[] GetFeeAddress()
+        {
+            return Storage.Get(Context(), "feeAddress");
+        }
+
         private static byte[] GetCoordinatorAddress()
         {
             return Storage.Get(Context(), "coordinatorAddress");
+        }
+
+        private static byte[] GetWithdrawerAddress()
+        {
+            return Storage.Get(Context(), "withdrawerAddress");
         }
 
         private static Offer GetOffer(byte[] tradingPair, byte[] hash)
@@ -453,16 +480,17 @@ namespace switcheo
          * Control *
          ***********/
 
-        private static bool Initialize(byte[] feeAddress, byte[] coordinatorAddress)
+        private static bool Initialize(byte[] feeAddress, byte[] coordinatorAddress, byte[] withdrawerAddress)
         {
             if (GetState() != Pending) return false;
 
             if (!SetFeeAddress(feeAddress)) throw new Exception("Failed to set fee address");
             if (!SetCoordinatorAddress(coordinatorAddress)) throw new Exception("Failed to set coordinator");
+            if (!SetWithdrawerAddress(withdrawerAddress)) throw new Exception("Failed to set withdrawer");
             if (!SetAnnounceDelay(maxAnnounceDelay)) throw new Exception("Failed to announcement delay");
 
             Storage.Put(Context(), "state", Active);
-            Initialized(feeAddress, coordinatorAddress, maxAnnounceDelay);
+            Initialized();
 
             return true;
         }
@@ -471,15 +499,7 @@ namespace switcheo
         {
             if (feeAddress.Length != 20) return false;
             Storage.Put(Context(), "feeAddress", feeAddress);
-
-            return true;
-        }
-
-        private static bool SetAnnounceDelay(BigInteger delay)
-        {
-            if (delay < 0 || delay > maxAnnounceDelay) return false;
-            Storage.Put(Context(), "announceDelay", delay);
-
+            EmitFeeAddressSet(feeAddress);
             return true;
         }
 
@@ -488,6 +508,22 @@ namespace switcheo
             if (coordinatorAddress.Length != 20) return false;
             Storage.Put(Context(), "coordinatorAddress", coordinatorAddress);
             EmitCoordinatorSet(coordinatorAddress);
+            return true;
+        }
+
+        private static bool SetWithdrawerAddress(byte[] withdrawerAddress)
+        {
+            if (withdrawerAddress.Length != 20) return false;
+            Storage.Put(Context(), "withdrawerAddress", withdrawerAddress);
+            EmitWithdrawerSet(withdrawerAddress);
+            return true;
+        }
+
+        private static bool SetAnnounceDelay(BigInteger delay)
+        {
+            if (delay < 0 || delay > maxAnnounceDelay) return false;
+            Storage.Put(Context(), "announceDelay", delay);
+            EmitAnnounceDelaySet(delay);
             return true;
         }
 
@@ -944,9 +980,9 @@ namespace switcheo
         {
             bool withdrawalAnnounced = IsWithdrawalAnnounced(address, assetID, amount);
 
-            if (!Runtime.CheckWitness(GetCoordinatorAddress()) && !withdrawalAnnounced)
+            if (!Runtime.CheckWitness(GetWithdrawerAddress()) && !withdrawalAnnounced)
             {                
-                Runtime.Log("Coordinator witness missing or withdrawal unannounced");
+                Runtime.Log("Withdrawer witness missing or withdrawal unannounced");
                 return false;
             }
 
@@ -969,8 +1005,7 @@ namespace switcheo
 
             Storage.Put(Context(), WithdrawalKey(transactionHash), address);
             Storage.Put(Context(), WithdrawKey(address, assetID), amount);
-            BigInteger amountInt = amount + 1 - 1; // compiler hack
-            EmitWithdrawing(address, assetID, amountInt);
+            EmitWithdrawing(address, assetID, amount);
 
             return true;
         }
@@ -1012,7 +1047,7 @@ namespace switcheo
             foreach (var attr in txnAttributes)
             {
                 if (attr.Usage == TAUsage_NEP5AssetID) return attr.Data.Take(20);
-                if (attr.Usage == TAUsage_SystemAssetID) return attr.Data;
+                if (attr.Usage == TAUsage_SystemAssetID) return attr.Data.Take(32);
             }
             return Empty;
         }
@@ -1022,7 +1057,7 @@ namespace switcheo
             var txnAttributes = transaction.GetAttributes();
             foreach (var attr in txnAttributes)
             {
-                if (attr.Usage == TAUsage_WithdrawalAmount) return attr.Data.AsBigInteger();
+                if (attr.Usage == TAUsage_WithdrawalAmount) return attr.Data.Take(32).Concat(Zero).AsBigInteger();
             }
             return 0;
         }
