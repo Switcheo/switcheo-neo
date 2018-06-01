@@ -54,6 +54,9 @@ namespace switcheo
         [DisplayName("removedFromWhitelist")]
         public static event Action<byte[]> EmitRemovedFromWhitelist; // (scriptHash)
 
+        [DisplayName("arbitraryInvokeAllowed")]
+        public static event Action EmitArbitraryInvokeAllowed;
+
         [DisplayName("feeAddressSet")]
         public static event Action<byte[]> EmitFeeAddressSet; // (address)
 
@@ -395,6 +398,12 @@ namespace switcheo
                 {
                     if (args.Length != 1) return false;
                     return RemoveFromWhitelist((byte[])args[0]);
+                }
+                if (operation == "setArbitraryInvokeAllowed")
+                {
+                    Storage.Put(Context(), "arbitraryInvokeAllowed", Active);
+                    EmitArbitraryInvokeAllowed();
+                    return true;
                 }
             }
 
@@ -801,7 +810,7 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Check whitelist
-                if (!VerifyContract(assetID)) return false;
+                if (!VerifyContract(assetID) && !IsArbitraryInvokeAllowed()) return false;
 
                 // Just transfer immediately
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
@@ -950,6 +959,7 @@ namespace switcheo
                     {
                         // New-style non-whitelisted NEP-5 transfers MUST NOT pass contract witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                        if (!IsArbitraryInvokeAllowed()) return false;
                     }
                     if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
                     {
@@ -1067,6 +1077,7 @@ namespace switcheo
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
         private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
+        private static bool IsArbitraryInvokeAllowed() => Storage.Get(Context(), "arbitraryInvokeAllowed") == Active;
 
         private static bool IsWithdrawalAnnounced(byte[] withdrawingAddr, byte[] assetID, BigInteger amount)
         {
