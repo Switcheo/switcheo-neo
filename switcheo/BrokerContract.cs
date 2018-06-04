@@ -290,7 +290,7 @@ namespace switcheo
                         Runtime.Log("Owner signature verification failed!");
                         return false;
                     }
-                    if (args.Length != 2) return false;
+                    if (args.Length != 3) return false;
                     return Initialize((byte[])args[0], (byte[])args[1], (byte[])args[2]);
                 }
 
