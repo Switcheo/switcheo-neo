@@ -304,44 +304,44 @@ namespace switcheo
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
 
                 // == Execute == 
-                if (operation == "deposit") // NEP-5 ONLY + backwards compatibility before nep-7
+                if (operation == "deposit") // NEP-5 ONLY + backwards compatibility before nep-7 (originator, assetID, amount)
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 3) return false;
                     if (!Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
                     return true;
                 }
-                if (operation == "makeOffer")
+                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce)
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], (byte[])args[5]);
                     return MakeOffer(offer);
                 }
-                if (operation == "fillOffer")
+                if (operation == "fillOffer") // fillerAddress, '', offerHash, amountToTake, takerFeeAssetID, takerFeeAmount)
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
                     return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
-                if (operation == "cancelOffer")
+                if (operation == "cancelOffer") // ('', offerHash)
                 {
                     if (GetState() == Pending) return false;
                     if (args.Length != 2) return false;
-                    return CancelOffer((byte[])args[0], (byte[])args[1]);
+                    return CancelOffer((byte[])args[1]);
                 }
-                if (operation == "withdraw")
+                if (operation == "withdraw") // ()
                 {
                     if (GetState() == Pending) return false;
-                    return ProcessWithdrawal(args);
+                    return ProcessWithdrawal();
                 }
-                if (operation == "announceCancel")
+                if (operation == "announceCancel") // (offerHash)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 2) return false;
-                    return AnnounceCancel((byte[])args[0], (byte[])args[1]);
+                    if (args.Length != 1) return false;
+                    return AnnounceCancel((byte[])args[0]);
                 }
-                if (operation == "announceWithdraw")
+                if (operation == "announceWithdraw") // (originator, assetID, amountToWithdraw)
                 {
                     if (GetState() == Pending) return false;
                     if (args.Length != 3) return false;
@@ -667,7 +667,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool CancelOffer(byte[] tradingPair, byte[] offerHash)
+        private static bool CancelOffer(byte[] offerHash)
         {
             // Check that the offer exists
             Offer offer = GetOffer(offerHash);
@@ -697,7 +697,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool AnnounceCancel(byte[] tradingPair, byte[] offerHash)
+        private static bool AnnounceCancel(byte[] offerHash)
         {
             // Check that the offer exists
             Offer offer = GetOffer(offerHash);
@@ -907,7 +907,7 @@ namespace switcheo
             return true;
         }
 
-        private static object ProcessWithdrawal(object[] args)
+        private static object ProcessWithdrawal()
         {
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
