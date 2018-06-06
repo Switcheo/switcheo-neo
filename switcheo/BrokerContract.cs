@@ -296,8 +296,7 @@ namespace switcheo
 
                 // == Getters ==
                 if (operation == "getState") return GetState();
-                if (operation == "getOffers") return GetOffers((byte[])args[0], (byte[])args[1]);
-                if (operation == "getOffer") return GetOffer((byte[])args[0], (byte[])args[1]);
+                if (operation == "getOffer") return GetOffer((byte[])args[0]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
                 if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
@@ -444,36 +443,12 @@ namespace switcheo
             return Storage.Get(Context(), "withdrawerAddress");
         }
 
-        private static Offer GetOffer(byte[] tradingPair, byte[] hash)
+        private static Offer GetOffer(byte[] offerHash)
         {
-            byte[] offerData = Storage.Get(Context(), tradingPair.Concat(hash));
+            byte[] offerData = Storage.Get(Context(), OfferKey(offerHash));
             if (offerData.Length == 0) return new Offer();
 
             return (Offer)offerData.Deserialize();
-        }
-
-        private static Offer[] GetOffers(byte[] tradingPair, byte[] offset) // tradingPair ==> offerAssetID.Concat(wantAssetID)
-        {
-            var result = new Offer[50];
-
-            var it = Storage.Find(Context(), tradingPair);
-
-            while (it.Next())
-            {
-                if (it.Value == offset) break;
-            }
-
-            var i = 0;
-            while (it.Next() && i < 50)
-            {
-                var value = it.Value;
-                var bytes = value.Deserialize();
-                var offer = (Offer)bytes;
-                result[i] = offer;
-                i++;
-            }
-
-            return result;
         }
 
         /***********
@@ -556,9 +531,8 @@ namespace switcheo
             if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
 
             // Check that nonce is not repeated
-            var tradingPair = TradingPair(offer);
             var offerHash = Hash(offer);
-            if (Storage.Get(Context(), tradingPair.Concat(offerHash)) != Empty) return false;
+            if (Storage.Get(Context(), OfferKey(offerHash)) != Empty) return false;
 
             // Check that the amounts > 0
             if (!(offer.OfferAmount > 0 && offer.WantAmount > 0)) return false;
@@ -574,7 +548,7 @@ namespace switcheo
             if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, ReasonMake)) return false;
 
             // Add the offer to storage
-            StoreOffer(tradingPair, offerHash, offer);
+            StoreOffer(offerHash, offer);
 
             // Notify clients
             EmitCreated(offer.MakerAddress, offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
@@ -595,7 +569,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
 
             // Check that the offer still exists 
-            Offer offer = GetOffer(tradingPair, offerHash);
+            Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonOfferNotExist);
@@ -685,7 +659,7 @@ namespace switcheo
             offer.AvailableAmount = offer.AvailableAmount - amountToTake;
 
             // Store updated offer
-            StoreOffer(tradingPair, offerHash, offer);
+            StoreOffer(offerHash, offer);
 
             // Notify clients
             EmitFilled(fillerAddress, offerHash, amountToFill, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount, amountToTake);
@@ -696,7 +670,7 @@ namespace switcheo
         private static bool CancelOffer(byte[] tradingPair, byte[] offerHash)
         {
             // Check that the offer exists
-            Offer offer = GetOffer(tradingPair, offerHash);
+            Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty) return false;
 
             // Check that the transaction is signed by the coordinator or pre-announced
@@ -710,7 +684,7 @@ namespace switcheo
             IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
 
             // Remove offer
-            RemoveOffer(tradingPair, offerHash);
+            RemoveOffer(offerHash);
 
             // Clean up announcement
             if (cancellationAnnounced)
@@ -726,7 +700,7 @@ namespace switcheo
         private static bool AnnounceCancel(byte[] tradingPair, byte[] offerHash)
         {
             // Check that the offer exists
-            Offer offer = GetOffer(tradingPair, offerHash);
+            Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty) return false;
 
             // Check that transaction is signed by the canceller or trading is frozen 
@@ -740,12 +714,12 @@ namespace switcheo
             return true;
         }
 
-        private static void StoreOffer(byte[] tradingPair, byte[] offerHash, Offer offer)
+        private static void StoreOffer(byte[] offerHash, Offer offer)
         {
             // Remove offer if completely filled
             if (offer.AvailableAmount == 0)
             {
-                RemoveOffer(tradingPair, offerHash);
+                RemoveOffer(offerHash);
             }
             else if (offer.AvailableAmount < 0)
             {
@@ -756,14 +730,14 @@ namespace switcheo
             {
                 // Serialize offer
                 var offerData = offer.Serialize();
-                Storage.Put(Context(), tradingPair.Concat(offerHash), offerData);
+                Storage.Put(Context(), OfferKey(offerHash), offerData);
             }
         }
 
-        private static void RemoveOffer(byte[] tradingPair, byte[] offerHash)
+        private static void RemoveOffer(byte[] offerHash)
         {
             // Delete offer data
-            Storage.Delete(Context(), tradingPair.Concat(offerHash));
+            Storage.Delete(Context(), OfferKey(offerHash));
         }
 
         private static void IncreaseBalance(byte[] originator, byte[] assetID, BigInteger amount, byte[] reason)
@@ -1079,7 +1053,6 @@ namespace switcheo
         // Helpers
         private static StorageContext Context() => Storage.CurrentContext;
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
-        private static byte[] TradingPair(Offer o) => o.OfferAssetID.Concat(o.WantAssetID); // to be used as a prefix only
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
         private static bool IsArbitraryInvokeAllowed() => Storage.Get(Context(), "arbitraryInvokeAllowed") == Active;
 
@@ -1112,7 +1085,8 @@ namespace switcheo
         private static byte[] Hash(Offer o)
         {
             var bytes = o.MakerAddress
-                .Concat(TradingPair(o))
+                .Concat(o.OfferAssetID)
+                .Concat(o.WantAssetID)
                 .Concat(o.OfferAmount.AsByteArray())
                 .Concat(o.WantAmount.AsByteArray())
                 .Concat(o.Nonce);
@@ -1121,6 +1095,7 @@ namespace switcheo
         }
 
         // Keys
+        private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => "balance".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] WithdrawalKey(byte[] transactionHash) => "withdrawalUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
