@@ -814,11 +814,6 @@ namespace switcheo
         // Receiving system asset directly
         public static bool Receiving()
         {
-            var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-
-            // Always pass immediately if this is step 1 of withdrawal which requires self-sending
-            if (GetWithdrawalStage(currentTxn) == Mark) return true;
-
             return true;
         }
 
