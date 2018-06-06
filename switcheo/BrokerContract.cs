@@ -740,19 +740,21 @@ namespace switcheo
             Storage.Delete(Context(), OfferKey(offerHash));
         }
 
-        private static void IncreaseBalance(byte[] originator, byte[] assetID, BigInteger amount, byte[] reason)
+        private static bool IncreaseBalance(byte[] originator, byte[] assetID, BigInteger amount, byte[] reason)
         {
-            if (amount < 1) return;
+            if (amount < 1) throw new ArgumentOutOfRangeException();
 
             byte[] key = BalanceKey(originator, assetID);
             BigInteger currentBalance = Storage.Get(Context(), key).AsBigInteger();
             Storage.Put(Context(), key, currentBalance + amount);
             EmitTransferred(originator, assetID, amount, reason);
+
+            return true;
         }
 
         private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount, byte[] reason)
         {
-            if (amount < 1) return false;
+            if (amount < 1) throw new ArgumentOutOfRangeException();
 
             var key = BalanceKey(address, assetID);
             var currentBalance = Storage.Get(Context(), key).AsBigInteger();
@@ -782,13 +784,15 @@ namespace switcheo
                 // Mark deposit
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 Storage.Put(Context(), DepositKey(currentTxn), 1);
-                if (received) EmitDeposited(originator, assetID, amount);
                 return received;
             }
             else if (assetID.Length == 20)
             {
                 // Check whitelist
                 if (!VerifyContract(assetID) && !IsArbitraryInvokeAllowed()) return false;
+
+                // Check amounts
+                if (amount < 1) return false;
 
                 // Just transfer immediately
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
@@ -849,8 +853,16 @@ namespace switcheo
                 }
             }
             byte[] firstAvailableAddress = currentTxn.GetReferences()[0].ScriptHash;
-            if (sentGasAmount > 0) IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
-            if (sentNeoAmount > 0) IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
+            if (sentGasAmount > 0)
+            {
+                IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
+                EmitDeposited(firstAvailableAddress, GasAssetID, sentGasAmount);
+            }
+            if (sentNeoAmount > 0)
+            {
+                IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
+                EmitDeposited(firstAvailableAddress, NeoAssetID, sentNeoAmount);
+            }
 
             return true;
         }
