@@ -49,10 +49,10 @@ namespace switcheo
         public static event Action EmitTradingResumed;
 
         [DisplayName("addedToWhitelist")]
-        public static event Action<byte[]> EmitAddedTowWhitelist; // (scriptHash)
+        public static event Action<byte[], bool> EmitAddedToWhitelist; // (scriptHash, isNewNEP5)
 
         [DisplayName("removedFromWhitelist")]
-        public static event Action<byte[]> EmitRemovedFromWhitelist; // (scriptHash)
+        public static event Action<byte[], bool> EmitRemovedFromWhitelist; // (scriptHash, isNewNEP5)
 
         [DisplayName("arbitraryInvokeAllowed")]
         public static event Action EmitArbitraryInvokeAllowed;
@@ -266,7 +266,7 @@ namespace switcheo
                         if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                         // Check for whitelist if we are doing old style NEP-5 transfers
                         // New style NEP-5 transfers SHOULD NOT require contract verification / witness
-                        if (!VerifyContract(assetID)) return false;
+                        if (!IsWhitelistedOldNEP5(assetID)) return false;
                     }
                     else
                     {
@@ -390,13 +390,13 @@ namespace switcheo
                 }
                 if (operation == "addToWhitelist")
                 {
-                    if (args.Length != 1) return false;
-                    return AddToWhitelist((byte[]) args[0]);
+                    if (args.Length != 2) return false;
+                    return AddToWhitelist((byte[])args[0], (bool)args[1]);
                 }
                 if (operation == "removeFromWhitelist")
                 {
-                    if (args.Length != 1) return false;
-                    return RemoveFromWhitelist((byte[])args[0]);
+                    if (args.Length != 2) return false;
+                    return RemoveFromWhitelist((byte[])args[0], (bool)args[1]);
                 }
                 if (operation == "setArbitraryInvokeAllowed")
                 {
@@ -502,19 +502,21 @@ namespace switcheo
             return true;
         }
 
-        private static bool AddToWhitelist(byte[] scriptHash)
+        private static bool AddToWhitelist(byte[] scriptHash, bool isNewNEP5)
         {
             if (scriptHash.Length != 20) return false;
-            Storage.Put(Context(), WhitelistKey(scriptHash), "1");
-            EmitAddedTowWhitelist(scriptHash);
+            var key = isNewNEP5 ? NewWhitelistKey(scriptHash) : OldWhitelistKey(scriptHash);
+            Storage.Put(Context(), key, "1");
+            EmitAddedToWhitelist(scriptHash, isNewNEP5);
             return true;
         }
 
-        private static bool RemoveFromWhitelist(byte[] scriptHash)
+        private static bool RemoveFromWhitelist(byte[] scriptHash, bool isNewNEP5)
         {
             if (scriptHash.Length != 20) return false;
-            Storage.Delete(Context(), WhitelistKey(scriptHash));
-            EmitRemovedFromWhitelist(scriptHash);
+            var key = isNewNEP5 ? NewWhitelistKey(scriptHash) : OldWhitelistKey(scriptHash);
+            Storage.Delete(Context(), key);
+            EmitRemovedFromWhitelist(scriptHash, isNewNEP5);
             return true;
         }
 
@@ -699,6 +701,9 @@ namespace switcheo
 
         private static bool AnnounceCancel(byte[] offerHash)
         {
+            // Check input length
+            if (offerHash.Length != 64) return false;
+
             // Check that the offer exists
             Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty) return false;
@@ -789,7 +794,7 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Check whitelist
-                if (!VerifyContract(assetID) && !IsArbitraryInvokeAllowed()) return false;
+                if (!IsWhitelistedOldNEP5(assetID) && !IsWhitelistedNewNEP5(assetID) && !IsArbitraryInvokeAllowed()) return false;
 
                 // Check amounts
                 if (amount < 1) return false;
@@ -940,11 +945,11 @@ namespace switcheo
 
                 if (isWithdrawingNEP5)
                 {
-                    if (!VerifyContract(assetID))
+                    if (!IsWhitelistedOldNEP5(assetID))
                     {
-                        // New-style non-whitelisted NEP-5 transfers MUST NOT pass contract witness checks
+                        if (!IsWhitelistedNewNEP5(assetID) && !IsArbitraryInvokeAllowed()) return false;
+                        // New-style NEP-5 transfers or arbitrary invokes MUST NOT pass contract witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
-                        if (!IsArbitraryInvokeAllowed()) return false;
                     }
                     if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
                     {
@@ -1082,10 +1087,18 @@ namespace switcheo
             return announceTime.AsBigInteger() + announceDelay > Runtime.Time;
         }
 
-        private static bool VerifyContract(byte[] assetID)
+        private static bool IsWhitelistedOldNEP5(byte[] assetID)
         {
+            if (assetID.Length != 20) return false;
             if (assetID.AsBigInteger() == 0) return false;
-            return Storage.Get(Context(), WhitelistKey(assetID)).Length > 0;
+            return Storage.Get(Context(), OldWhitelistKey(assetID)).Length > 0;
+        }
+
+        private static bool IsWhitelistedNewNEP5(byte[] assetID)
+        {
+            if (assetID.Length != 20) return false;
+            if (assetID.AsBigInteger() == 0) return false;
+            return Storage.Get(Context(), NewWhitelistKey(assetID)).Length > 0;
         }
 
         // Unique hash for an offer
@@ -1106,7 +1119,8 @@ namespace switcheo
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => "balance".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] WithdrawalKey(byte[] transactionHash) => "withdrawalUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
-        private static byte[] WhitelistKey(byte[] assetID) => "contractWhitelist".AsByteArray().Concat(assetID);
+        private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
+        private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
         private static byte[] CancelAnnounceKey(byte[] offerHash) => "cancelAnnounce".AsByteArray().Concat(offerHash);
         private static byte[] WithdrawAnnounceKey(byte[] originator, byte[] assetID) => "withdrawAnnounce".AsByteArray().Concat(originator).Concat(assetID);
