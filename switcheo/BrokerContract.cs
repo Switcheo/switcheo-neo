@@ -256,8 +256,11 @@ namespace switcheo
                 }
                 else if (withdrawalStage == Withdraw)
                 {
-                    // Check that utxo has been reserved
+                    // Check that there is only the neccessary inputs/outputs
                     if (inputs.Length != 1) return false;
+                    if (outputs.Length != 1) return false;
+
+                    // Check that utxo has been reserved
                     if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
 
                     if (isWithdrawingNEP5)
@@ -271,7 +274,6 @@ namespace switcheo
                     else
                     {
                         // Check withdrawal destination and amount
-                        if (outputs.Length != 1) return false;
                         if (outputs[0].AssetId != assetID) return false;
                         if (outputs[0].ScriptHash != withdrawingAddr) return false;
                     }
@@ -306,7 +308,6 @@ namespace switcheo
                 // == Execute == 
                 if (operation == "deposit") // NEP-5 ONLY + backwards compatibility before nep-7 (originator, assetID, amount)
                 {
-                    if (GetState() != Active) return false;
                     if (args.Length != 3) return false;
                     if (!Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
                     return true;
@@ -460,8 +461,8 @@ namespace switcheo
             if (GetState() != Pending) return false;
 
             if (!SetFeeAddress(feeAddress)) throw new Exception("Failed to set fee address");
-            if (!SetCoordinatorAddress(coordinatorAddress)) throw new Exception("Failed to set coordinator");
-            if (!SetWithdrawerAddress(withdrawerAddress)) throw new Exception("Failed to set withdrawer");
+            if (!SetCoordinatorAddress(coordinatorAddress)) throw new Exception("Failed to set the coordinator");
+            if (!SetWithdrawerAddress(withdrawerAddress)) throw new Exception("Failed to set the withdrawer");
             if (!SetAnnounceDelay(maxAnnounceDelay)) throw new Exception("Failed to announcement delay");
 
             Storage.Put(Context(), "state", Active);
@@ -793,7 +794,11 @@ namespace switcheo
             }
             else if (assetID.Length == 20)
             {
-                // Check whitelist
+                // Verify that deposit is authorized
+                if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+                if (GetState() != Active) return false;
+
+                // Check that the contract is safe
                 if (!IsWhitelistedOldNEP5(assetID) && !IsWhitelistedNewNEP5(assetID) && !IsArbitraryInvokeAllowed()) return false;
 
                 // Check amounts
