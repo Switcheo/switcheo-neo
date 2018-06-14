@@ -135,7 +135,6 @@ namespace switcheo
             byte[] makerAddress,
             byte[] offerAssetID, byte[] offerAmount,
             byte[] wantAssetID, byte[] wantAmount,
-            byte[] availableAmount,
             byte[] nonce
         )
         {
@@ -146,7 +145,7 @@ namespace switcheo
                 OfferAmount = offerAmount.AsBigInteger(),
                 WantAssetID = wantAssetID,
                 WantAmount = wantAmount.AsBigInteger(),
-                AvailableAmount = availableAmount.AsBigInteger(),
+                AvailableAmount = offerAmount.AsBigInteger(),
                 Nonce = nonce,
             };
         }
@@ -316,14 +315,14 @@ namespace switcheo
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
-                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[2], (byte[])args[5]);
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5]);
                     return MakeOffer(offer);
                 }
                 if (operation == "fillOffer") // fillerAddress, '', offerHash, amountToTake, takerFeeAssetID, takerFeeAmount)
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
-                    return FillOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5]);
+                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3], (BigInteger)args[4], (bool)args[5]);
                 }
                 if (operation == "cancelOffer") // ('', offerHash)
                 {
@@ -419,9 +418,11 @@ namespace switcheo
             return Storage.Get(Context(), "state");
         }
 
-        private static BigInteger GetBalance(byte[] originator, byte[] assetID)
+        private static BigInteger GetBalance(byte[] address, byte[] assetID)
         {
-            return Storage.Get(Context(), BalanceKey(originator, assetID)).AsBigInteger();
+            if (address.Length != 20) throw new ArgumentOutOfRangeException();
+            if (assetID.Length != 20 && assetID.Length != 32) throw new ArgumentOutOfRangeException();
+            return Storage.Get(Context(), BalanceKey(address, assetID)).AsBigInteger();
         }
 
         private static BigInteger GetAnnounceDelay()
@@ -446,6 +447,8 @@ namespace switcheo
 
         private static Offer GetOffer(byte[] offerHash)
         {
+            if (offerHash.Length != 32) throw new ArgumentOutOfRangeException();
+
             byte[] offerData = Storage.Get(Context(), OfferKey(offerHash));
             if (offerData.Length == 0) return new Offer();
 
@@ -561,7 +564,7 @@ namespace switcheo
         // Fills an offer by taking the amount you want
         // => amountToFill's asset type = offer's wantAssetID
         // amountToTake's asset type = offerAssetID (taker is taking what is offered)
-        private static bool FillOffer(byte[] fillerAddress, byte[] tradingPair, byte[] offerHash, BigInteger amountToTake, byte[] takerFeeAssetID, BigInteger takerFeeAmount)
+        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToTake, byte[] takerFeeAssetID, BigInteger takerFeeAmount, bool burnTokens)
         {
             // Note: We do all checks first then execute state changes
 
@@ -570,6 +573,10 @@ namespace switcheo
 
             // Check that transaction is signed by the coordinator
             if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+
+            // Check fees
+            if (takerFeeAssetID.Length != 20 && takerFeeAssetID.Length != 32) return false;
+            if (takerFeeAmount < 0) return false;
 
             // Check that the offer still exists 
             Offer offer = GetOffer(offerHash);
@@ -618,18 +625,18 @@ namespace switcheo
                 return false;
             }
 
-            // Check the fee type
-            bool useNativeTokens = takerFeeAssetID != offer.OfferAssetID;
+            // Check if we should deduct fees separately from the taker amount
+            bool deductFeesSeparately = takerFeeAssetID != offer.OfferAssetID;
 
             // Check that there is enough balance in native fees if using native fees
-            if (useNativeTokens && GetBalance(fillerAddress, takerFeeAssetID) < takerFeeAmount)
+            if (deductFeesSeparately && GetBalance(fillerAddress, takerFeeAssetID) < takerFeeAmount)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnNativeToken);
                 return false;
             }
 
             // Check that the amountToTake is not more than 0.5% if not using native fees
-            if (!useNativeTokens && ((takerFeeAmount * 1000) / amountToTake > 5))
+            if (!deductFeesSeparately && ((takerFeeAmount * 1000) / amountToTake > 5))
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFeesMoreThanLimit);
                 return false;
@@ -642,19 +649,25 @@ namespace switcheo
             IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
 
             // Move taken asset to the taker balance
-            var amountToTakeAfterFees = useNativeTokens ? amountToTake : amountToTake - takerFeeAmount;
+            var amountToTakeAfterFees = deductFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
             IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
             // Move fees
             byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             if (takerFeeAmount > 0)
             {
-                if (useNativeTokens)
+                if (deductFeesSeparately)
                 {
+                    // Reduce fees here separately as it is a different asset type
                     ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
+                }
+                if (!burnTokens)
+                {
+                    // Only increase fee address balance if not burning
+                    IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
                 } else
                 {
-                    IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
+                    // TODO: emit burn event
                 }
             }
 
@@ -702,9 +715,6 @@ namespace switcheo
 
         private static bool AnnounceCancel(byte[] offerHash)
         {
-            // Check input length
-            if (offerHash.Length != 64) return false;
-
             // Check that the offer exists
             Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty) return false;
@@ -801,7 +811,8 @@ namespace switcheo
                 // Check that the contract is safe
                 if (!IsWhitelistedOldNEP5(assetID) && !IsWhitelistedNewNEP5(assetID) && !IsArbitraryInvokeAllowed()) return false;
 
-                // Check amounts
+                // Check address and amounts
+                if (originator.Length != 20) return false;
                 if (amount < 1) return false;
 
                 // Just transfer immediately
@@ -883,8 +894,6 @@ namespace switcheo
 
         private static bool VerifyWithdrawalValid(byte[] holderAddress, byte[] assetID, BigInteger amount)
         {
-            if (holderAddress.Length != 20) return false;
-            if (assetID.Length != 20 && assetID.Length != 32) return false;
             if (amount < 1) return false;
 
             var balance = GetBalance(holderAddress, assetID);
@@ -921,14 +930,8 @@ namespace switcheo
         {
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
-            if (withdrawalStage == Empty) return false;
-
             var withdrawingAddr = GetWithdrawalAddress(currentTxn);
-            if (withdrawingAddr == Empty) return false;
-
             var assetID = GetWithdrawalAsset(currentTxn);
-            if (assetID == Empty) return false;
-
             var isWithdrawingNEP5 = assetID.Length == 20;
             var inputs = currentTxn.GetInputs();
             var outputs = currentTxn.GetOutputs();
@@ -1033,7 +1036,7 @@ namespace switcheo
             {
                 if (attr.Usage == TAUsage_WithdrawalAddress) return attr.Data.Take(20);
             }
-            return Empty;
+            throw new ArgumentNullException();
         }
 
         private static byte[] GetWithdrawalAsset(Transaction transaction)
@@ -1044,7 +1047,7 @@ namespace switcheo
                 if (attr.Usage == TAUsage_NEP5AssetID) return attr.Data.Take(20);
                 if (attr.Usage == TAUsage_SystemAssetID) return attr.Data.Take(32);
             }
-            return Empty;
+            throw new ArgumentNullException();
         }
 
         private static BigInteger GetWithdrawalAmount(Transaction transaction)
@@ -1054,7 +1057,7 @@ namespace switcheo
             {
                 if (attr.Usage == TAUsage_WithdrawalAmount) return attr.Data.Take(32).Concat(Zero).AsBigInteger();
             }
-            return 0;
+            throw new ArgumentNullException();
         }
 
         private static byte[] GetWithdrawalStage(Transaction transaction)
@@ -1064,7 +1067,7 @@ namespace switcheo
             {
                 if (attr.Usage == TAUsage_WithdrawalStage) return attr.Data.Take(1);
             }
-            return Empty;
+            throw new ArgumentNullException();
         }
 
         // Helpers
