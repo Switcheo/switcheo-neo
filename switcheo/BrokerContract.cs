@@ -852,8 +852,11 @@ namespace switcheo
             // Check for double deposits
             if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 1) return false;
 
-            // Don't deposit if this is withdrawal stage 1 (self-send)
-            if (GetWithdrawalStage(currentTxn) == Mark) return false;
+            // Don't deposit if this is a withdrawal
+            foreach (var i in currentTxn.GetReferences())
+            {
+                if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+            }
 
             // Only deposit those assets not from contract
             ulong sentGasAmount = 0;
