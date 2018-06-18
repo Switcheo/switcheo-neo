@@ -1089,7 +1089,7 @@ namespace switcheo
             var announceInfo = (WithdrawInfo)announce.Deserialize();
             var announceDelay = GetAnnounceDelay();
 
-            return announceInfo.TimeStamp + announceDelay > Runtime.Time && announceInfo.Amount == amount;
+            return announceInfo.TimeStamp + announceDelay < Runtime.Time && announceInfo.Amount == amount;
         }
 
         private static bool IsCancellationAnnounced(byte[] offerHash)
@@ -1098,7 +1098,7 @@ namespace switcheo
             if (announceTime.Length == 0) return false; // not announced
             var announceDelay = GetAnnounceDelay();
 
-            return announceTime.AsBigInteger() + announceDelay > Runtime.Time;
+            return announceTime.AsBigInteger() + announceDelay < Runtime.Time;
         }
 
         private static bool IsWhitelistedOldNEP5(byte[] assetID)
