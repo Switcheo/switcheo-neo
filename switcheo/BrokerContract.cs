@@ -225,6 +225,8 @@ namespace switcheo
                         // Check that NEP5 withdrawals don't use contract assets
                         if (references.Length != 1) return false;
                         if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        // Check that the reserved output is not wrongly sent to the contract - as this may be blocked later, and the user's funds will be stucked
+                        if (outputs[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                     }
                     else
                     {
@@ -530,11 +532,8 @@ namespace switcheo
 
         private static bool MakeOffer(Offer offer)
         {
-            // Check that transaction is signed by the maker
-            if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
-
-            // Check that transaction is signed by the coordinator
-            if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+            // Check that transaction is signed by the maker and coordinator
+            if (!CheckTradeWitnesses(offer.MakerAddress)) return false;
 
             // Check that nonce is not repeated
             var offerHash = Hash(offer);
@@ -568,11 +567,8 @@ namespace switcheo
         {
             // Note: We do all checks first then execute state changes
 
-            // Check that transaction is signed by the filler
-            if (!Runtime.CheckWitness(fillerAddress)) return true;
-
-            // Check that transaction is signed by the coordinator
-            if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+            // Check that transaction is signed by the filler and coordinator
+            if (!CheckTradeWitnesses(fillerAddress)) return false;
 
             // Check fees
             if (takerFeeAssetID.Length != 20 && takerFeeAssetID.Length != 32) return false;
@@ -805,7 +801,7 @@ namespace switcheo
             else if (assetID.Length == 20)
             {
                 // Verify that deposit is authorized
-                if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+                if (!CheckTradeWitnesses(originator)) return false;
                 if (GetState() != Active) return false;
 
                 // Check that the contract is safe
@@ -839,6 +835,7 @@ namespace switcheo
         // Receiving system asset directly
         public static bool Receiving()
         {
+            // TODO: replicate received checks here?
             return true;
         }
 
@@ -848,14 +845,19 @@ namespace switcheo
             // Check the current transaction for the system assets
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var outputs = currentTxn.GetOutputs();
+            var references = currentTxn.GetReferences();
 
             // Check for double deposits
             if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 1) return false;
 
             // Don't deposit if this is a withdrawal
-            foreach (var i in currentTxn.GetReferences())
+            var coordinatorAddress = GetCoordinatorAddress();
+            var withdrawerAddress = GetWithdrawerAddress();
+            foreach (var i in references)
             {
                 if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                if (i.ScriptHash == coordinatorAddress) return false;
+                if (i.ScriptHash == withdrawerAddress) return false;
             }
 
             // Only deposit those assets not from contract
@@ -876,7 +878,8 @@ namespace switcheo
                     }
                 }
             }
-            byte[] firstAvailableAddress = currentTxn.GetReferences()[0].ScriptHash;
+
+            byte[] firstAvailableAddress = references[0].ScriptHash;
             if (sentGasAmount > 0)
             {
                 IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
@@ -1110,6 +1113,26 @@ namespace switcheo
             if (assetID.Length != 20) return false;
             if (assetID.AsBigInteger() == 0) return false;
             return Storage.Get(Context(), NewWhitelistKey(assetID)).Length > 0;
+        }
+
+        private static bool CheckTradeWitnesses(byte[] traderAddress)
+        {
+            // Cache coordinator address for checks
+            var coordinatorAddress = GetCoordinatorAddress();
+
+            // Check that transaction is signed by the trader
+            if (!Runtime.CheckWitness(traderAddress)) return false;
+
+            // Check that transaction is signed by the coordinator
+            if (!Runtime.CheckWitness(coordinatorAddress)) return false;
+
+            // Check that the trader is not also the coordinator
+            if (traderAddress == coordinatorAddress) return false;
+
+            // Check that the trader is not also the withdrawer
+            if (traderAddress == GetWithdrawerAddress()) return false;
+
+            return true;
         }
 
         // Unique hash for an offer
