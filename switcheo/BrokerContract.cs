@@ -268,6 +268,8 @@ namespace switcheo
                     {
                         // Check that NEP5 withdrawals don't use contract assets
                         if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        // Check that only one output of a txn is used
+                        if (inputs[0].PrevIndex != 0) return false;
                         // Check for whitelist if we are doing old style NEP-5 transfers
                         // New style NEP-5 transfers SHOULD NOT require contract verification / witness
                         if (!IsWhitelistedOldNEP5(assetID)) return false;
@@ -687,10 +689,11 @@ namespace switcheo
 
             // Check that the transaction is signed by the coordinator or pre-announced
             var cancellationAnnounced = IsCancellationAnnounced(offerHash);
-            if (!Runtime.CheckWitness(GetCoordinatorAddress()) && !cancellationAnnounced) return false;
+            var coordinatorWitnessed = Runtime.CheckWitness(GetCoordinatorAddress());
+            if (!(coordinatorWitnessed || cancellationAnnounced)) return false;
 
-            // Check that transaction is signed by the canceller or trading is frozen 
-            if (!Runtime.CheckWitness(offer.MakerAddress) && !IsTradingFrozen()) return false;
+            // Check that transaction is signed by the canceller or trading is frozen
+            if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && coordinatorWitnessed))) return false;
 
             // Move funds to maker address
             IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
@@ -699,9 +702,10 @@ namespace switcheo
             RemoveOffer(offerHash);
 
             // Clean up announcement
-            if (cancellationAnnounced)
+            var key = CancelAnnounceKey(offerHash);
+            if (key.Length > 0)
             {
-                Storage.Delete(Context(), CancelAnnounceKey(offerHash));
+                Storage.Delete(Context(), key);
             }
 
             // Notify runtime
@@ -805,7 +809,7 @@ namespace switcheo
                 if (GetState() != Active) return false;
 
                 // Check that the contract is safe
-                if (!IsWhitelistedOldNEP5(assetID) && !IsWhitelistedNewNEP5(assetID) && !IsArbitraryInvokeAllowed()) return false;
+                if (!(IsWhitelistedOldNEP5(assetID) || IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
 
                 // Check address and amounts
                 if (originator.Length != 20) return false;
@@ -959,12 +963,14 @@ namespace switcheo
 
                 if (isWithdrawingNEP5)
                 {
+                    // Check whether whitelisted first
                     if (!IsWhitelistedOldNEP5(assetID))
                     {
-                        if (!IsWhitelistedNewNEP5(assetID) && !IsArbitraryInvokeAllowed()) return false;
+                        if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                         // New-style NEP-5 transfers or arbitrary invokes MUST NOT pass contract witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
                     }
+                    // Execute withdraw
                     if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
                     {
                         Runtime.Log("Tried to withdraw NEP-5 but failed!");
@@ -1002,9 +1008,10 @@ namespace switcheo
                 return false;
             }
 
-            if (withdrawalAnnounced)
+            var key = WithdrawAnnounceKey(address, assetID);
+            if (key.Length > 0)
             {
-                Storage.Delete(Context(), WithdrawAnnounceKey(address, assetID));
+                Storage.Delete(Context(), key);
             }
 
             Storage.Put(Context(), WithdrawalKey(transactionHash), address);
