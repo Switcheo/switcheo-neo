@@ -909,7 +909,7 @@ namespace switcheo
             var balance = GetBalance(holderAddress, assetID);
             if (balance < amount) return false;
 
-            var withdrawingAmount = GetWithdrawAmount(holderAddress, assetID);
+            var withdrawingAmount = GetWithdrawingAmount(holderAddress, assetID);
             if (withdrawingAmount > 0) return false;
 
             return true;
@@ -959,16 +959,23 @@ namespace switcheo
 
                 Storage.Delete(Context(), key);
 
-                var amount = GetWithdrawAmount(withdrawingAddr, assetID);
+                var amount = GetWithdrawingAmount(withdrawingAddr, assetID);
 
                 if (isWithdrawingNEP5)
                 {
-                    // Check whether whitelisted first
-                    if (!IsWhitelistedOldNEP5(assetID))
+                    // Check old whitelist
+                    if (IsWhitelistedOldNEP5(assetID))
                     {
-                        if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
-                        // New-style NEP-5 transfers or arbitrary invokes MUST NOT pass contract witness checks
+                        // We must pass witness for old NEP-5 transfer to succeed
+                        if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                    }
+                    // Check new whitelist
+                    else
+                    {
+                        // New-style NEP-5 transfers or arbitrary invokes SHOULD NOT pass contract witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                        // Allow only if in whitelist or arbitrary dynamic invoke is allowed
+                        if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                     }
                     // Execute withdraw
                     if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
@@ -1037,7 +1044,7 @@ namespace switcheo
             return true;
         }
 
-        private static BigInteger GetWithdrawAmount(byte[] originator, byte[] assetID)
+        private static BigInteger GetWithdrawingAmount(byte[] originator, byte[] assetID)
         {
             return Storage.Get(Context(), WithdrawKey(originator, assetID)).AsBigInteger();
         }
