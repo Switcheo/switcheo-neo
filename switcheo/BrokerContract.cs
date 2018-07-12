@@ -170,17 +170,7 @@ namespace switcheo
         /// </param>
         public static object Main(string operation, params object[] args)
         {
-            if (Runtime.Trigger == TriggerType.VerificationR)
-            {
-                if (operation == "receiving") return Receiving();
-                return false;
-            }
-            else if (Runtime.Trigger == TriggerType.ApplicationR)
-            {
-                if (operation == "received") return Received();
-                return false;
-            }
-            else if (Runtime.Trigger == TriggerType.Verification)
+            if (Runtime.Trigger == TriggerType.Verification)
             {
                 if (GetState() == Pending) return false;
 
@@ -225,8 +215,6 @@ namespace switcheo
                         // Check that NEP5 withdrawals don't use contract assets
                         if (references.Length != 1) return false;
                         if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
-                        // Check that the reserved output is not wrongly sent to the contract - as this may be blocked later, and the user's funds will be stucked
-                        if (outputs[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                     }
                     else
                     {
@@ -260,23 +248,23 @@ namespace switcheo
                     // Check that there is only the neccessary inputs/outputs
                     if (inputs.Length != 1) return false;
                     if (outputs.Length != 1) return false;
-
-                    // Check that utxo has been reserved
-                    if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
-
+                    
                     if (isWithdrawingNEP5)
                     {
                         // Check that NEP5 withdrawals don't use contract assets
                         if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
-                        // Check that only one output of a txn is used
-                        if (inputs[0].PrevIndex != 0) return false;
-                        // Check for whitelist if we are doing old style NEP-5 transfers
+                        // Check for whitelist if we are doing old style NEP-5 transfers;
                         // New style NEP-5 transfers SHOULD NOT require contract verification / witness
                         if (!IsWhitelistedOldNEP5(assetID)) return false;
                     }
                     else
                     {
-                        // Check withdrawal destination and amount
+                        // Check that utxo is from a reserved txn
+                        if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
+                        // Check that the correct utxo of the txn is used
+                        if (inputs[0].PrevIndex != 0) return false;
+
+                        // Check withdrawal destination
                         if (outputs[0].AssetId != assetID) return false;
                         if (outputs[0].ScriptHash != withdrawingAddr) return false;
                     }
@@ -349,7 +337,7 @@ namespace switcheo
                 {
                     if (GetState() == Pending) return false;
                     if (args.Length != 3) return false;
-                    return AnnounceWithdraw((byte[])args[0], (byte[])args[1], (BigInteger)args[0]);
+                    return AnnounceWithdraw((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
 
                 // == Owner ==
@@ -832,17 +820,6 @@ namespace switcheo
             return false;
         }
 
-        /********************
-         * Receive Triggers *
-         ********************/
-
-        // Receiving system asset directly
-        public static bool Receiving()
-        {
-            // TODO: replicate received checks here?
-            return true;
-        }
-
         // Received system asset
         public static bool Received()
         {
@@ -950,15 +927,46 @@ namespace switcheo
             {
                 if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
                 BigInteger amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : outputs[0].Value;
-                return MarkWithdrawal(currentTxn.Hash, withdrawingAddr, assetID, amount);
+
+                bool withdrawalAnnounced = IsWithdrawalAnnounced(withdrawingAddr, assetID, amount);
+
+                if (!Runtime.CheckWitness(GetWithdrawerAddress()) && !withdrawalAnnounced)
+                {
+                    Runtime.Log("Withdrawer witness missing or withdrawal unannounced");
+                    return false;
+                }
+
+                if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount))
+                {
+                    Runtime.Log("Verify withdrawal failed");
+                    return false;
+                }
+
+                if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonPrepareWithdrawal))
+                {
+                    Runtime.Log("Reduce balance for withdrawal failed");
+                    return false;
+                }
+
+                var key = WithdrawAnnounceKey(withdrawingAddr, assetID);
+                if (key.Length > 0)
+                {
+                    Storage.Delete(Context(), key);
+                }
+
+                if (!isWithdrawingNEP5)
+                {
+                    // Reserve utxo for the transaction hash if withdrawing system assets
+                    Storage.Put(Context(), WithdrawalKey(currentTxn.Hash), withdrawingAddr);
+                }
+
+                Storage.Put(Context(), WithdrawKey(withdrawingAddr, assetID), amount);
+                EmitWithdrawing(withdrawingAddr, assetID, amount);
+
+                return true;
             }
             else if (withdrawalStage == Withdraw)
             {
-                var key = WithdrawalKey(inputs[0].PrevHash);
-                if (Storage.Get(Context(), key) != withdrawingAddr) return false;
-
-                Storage.Delete(Context(), key);
-
                 var amount = GetWithdrawingAmount(withdrawingAddr, assetID);
 
                 if (isWithdrawingNEP5)
@@ -984,6 +992,12 @@ namespace switcheo
                         return false;
                     }
                 }
+                else
+                {
+                    // Clean up reservations
+                    var key = WithdrawalKey(inputs[0].PrevHash);
+                    Storage.Delete(Context(), key);
+                }
 
                 Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
                 EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
@@ -991,41 +1005,6 @@ namespace switcheo
             }
 
             return false;
-        }
-
-        private static bool MarkWithdrawal(byte[] transactionHash, byte[] address, byte[] assetID, BigInteger amount)
-        {
-            bool withdrawalAnnounced = IsWithdrawalAnnounced(address, assetID, amount);
-
-            if (!Runtime.CheckWitness(GetWithdrawerAddress()) && !withdrawalAnnounced)
-            {                
-                Runtime.Log("Withdrawer witness missing or withdrawal unannounced");
-                return false;
-            }
-
-            if (!VerifyWithdrawalValid(address, assetID, amount))
-            {
-                Runtime.Log("Verify withdrawal failed");
-                return false;
-            }
-
-            if (!ReduceBalance(address, assetID, amount, ReasonPrepareWithdrawal))
-            {
-                Runtime.Log("Reduce balance for withdrawal failed");
-                return false;
-            }
-
-            var key = WithdrawAnnounceKey(address, assetID);
-            if (key.Length > 0)
-            {
-                Storage.Delete(Context(), key);
-            }
-
-            Storage.Put(Context(), WithdrawalKey(transactionHash), address);
-            Storage.Put(Context(), WithdrawKey(address, assetID), amount);
-            EmitWithdrawing(address, assetID, amount);
-
-            return true;
         }
 
         private static bool WithdrawNEP5(byte[] address, byte[] assetID, BigInteger amount)
