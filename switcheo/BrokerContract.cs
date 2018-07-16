@@ -1,6 +1,7 @@
 ﻿using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Services.Neo;
 using Neo.SmartContract.Framework.Services.System;
+using Neo.VM;
 using System;
 using System.ComponentModel;
 using System.Numerics;
@@ -49,10 +50,10 @@ namespace switcheo
         public static event Action EmitTradingResumed;
 
         [DisplayName("addedToWhitelist")]
-        public static event Action<byte[], bool> EmitAddedToWhitelist; // (scriptHash, isNewNEP5)
+        public static event Action<byte[], int> EmitAddedToWhitelist; // (scriptHash, whitelistEnum)
 
         [DisplayName("removedFromWhitelist")]
-        public static event Action<byte[], bool> EmitRemovedFromWhitelist; // (scriptHash, isNewNEP5)
+        public static event Action<byte[], int> EmitRemovedFromWhitelist; // (scriptHash, whitelistEnum)
 
         [DisplayName("arbitraryInvokeAllowed")]
         public static event Action EmitArbitraryInvokeAllowed;
@@ -97,7 +98,8 @@ namespace switcheo
         private static readonly byte[] Zero = { 0x00 };
         private static readonly byte[] NeoAssetID = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
-        private static readonly byte[] MctAssetID = { 63, 188, 96, 124, 18, 194, 135, 54, 52, 50, 36, 164, 180, 216, 245, 19, 165, 194, 124, 168 };
+        // private static readonly byte[] MctAssetID = { 63, 188, 96, 124, 18, 194, 135, 54, 52, 50, 36, 164, 180, 216, 245, 19, 165, 194, 124, 168 };
+        private static readonly byte[] MctAssetID = { 161, 47, 30, 104, 24, 178, 176, 62, 14, 249, 6, 237, 39, 46, 18, 9, 144, 116, 169, 38 };
         private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
 
         // Reason Code for balance changes
@@ -303,8 +305,7 @@ namespace switcheo
                 if (operation == "deposit") // (originator, assetID, amount)
                 {
                     if (args.Length != 3) return false;
-                    if (!Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
-                    return true;
+                    return Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
                 if (operation == "onTokenTransfer") // deposit for MCT contract only (originator, assetID, amount)
                 {
@@ -393,12 +394,12 @@ namespace switcheo
                 if (operation == "addToWhitelist")
                 {
                     if (args.Length != 2) return false;
-                    return AddToWhitelist((byte[])args[0], (bool)args[1]);
+                    return AddToWhitelist((byte[])args[0], (int)args[1]);
                 }
                 if (operation == "removeFromWhitelist")
                 {
                     if (args.Length != 2) return false;
-                    return RemoveFromWhitelist((byte[])args[0], (bool)args[1]);
+                    return RemoveFromWhitelist((byte[])args[0], (int)args[1]);
                 }
                 if (operation == "setArbitraryInvokeAllowed")
                 {
@@ -508,22 +509,22 @@ namespace switcheo
             return true;
         }
 
-        private static bool AddToWhitelist(byte[] scriptHash, bool isNewNEP5)
+        private static bool AddToWhitelist(byte[] scriptHash, int whitelistEnum)
         {
             if (scriptHash.Length != 20) return false;
             // TODO: Guard against adding to multiple lists?
-            var key = isNewNEP5 ? NewWhitelistKey(scriptHash) : OldWhitelistKey(scriptHash);
+            var key = GetWhitelistKey(scriptHash, whitelistEnum);
             Storage.Put(Context(), key, "1");
-            EmitAddedToWhitelist(scriptHash, isNewNEP5);
+            EmitAddedToWhitelist(scriptHash, whitelistEnum);
             return true;
         }
 
-        private static bool RemoveFromWhitelist(byte[] scriptHash, bool isNewNEP5)
+        private static bool RemoveFromWhitelist(byte[] scriptHash, int whitelistEnum)
         {
             if (scriptHash.Length != 20) return false;
-            var key = isNewNEP5 ? NewWhitelistKey(scriptHash) : OldWhitelistKey(scriptHash);
+            var key = GetWhitelistKey(scriptHash, whitelistEnum);
             Storage.Delete(Context(), key);
-            EmitRemovedFromWhitelist(scriptHash, isNewNEP5);
+            EmitRemovedFromWhitelist(scriptHash, whitelistEnum);
             return true;
         }
 
@@ -806,10 +807,8 @@ namespace switcheo
                 // Update balances first
                 if (!ReceivedNEP5(originator, assetID, amount)) return false;
 
-                // Just transfer immediately and throw on failure
-                var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
-                var Contract = (NEP5Contract)assetID.ToDelegate();
-                if (!(bool)Contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
+                // Execute deposit
+                TransferNEP5(originator, ExecutionEngine.ExecutingScriptHash, assetID, amount);
 
                 return true;
             }
@@ -1013,8 +1012,8 @@ namespace switcheo
                         // Allow only if in whitelist or arbitrary dynamic invoke is allowed
                         if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                     }
-                    // Execute withdraw
-                    WithdrawNEP5(withdrawingAddr, assetID, amount);
+                    // Execute withdrawal
+                    TransferNEP5(ExecutionEngine.ExecutingScriptHash, withdrawingAddr, assetID, amount);
                 }
                 else
                 {
@@ -1027,16 +1026,6 @@ namespace switcheo
             }
 
             return false;
-        }
-
-        private static bool WithdrawNEP5(byte[] address, byte[] assetID, BigInteger amount)
-        {
-            // Transfer token
-            var args = new object[] { ExecutionEngine.ExecutingScriptHash, address, amount };
-            var contract = (NEP5Contract)assetID.ToDelegate();
-            if (!(bool)contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
-
-            return true;
         }
 
         private static BigInteger GetWithdrawingAmount(byte[] originator, byte[] assetID)
@@ -1124,6 +1113,13 @@ namespace switcheo
             return Storage.Get(Context(), NewWhitelistKey(assetID)).Length > 0;
         }
 
+        private static bool IsPythonNEP5(byte[] assetID)
+        {
+            if (assetID.Length != 20) return false;
+            if (assetID.AsBigInteger() == 0) return false;
+            return Storage.Get(Context(), PytWhitelistKey(assetID)).Length > 0;
+        }
+
         private static bool CheckTradeWitnesses(byte[] traderAddress)
         {
             // Cache coordinator address for checks
@@ -1142,6 +1138,36 @@ namespace switcheo
             if (traderAddress == GetWithdrawCoordinatorAddress()) return false;
 
             return true;
+        }
+
+        private static void TransferNEP5(byte[] from, byte[] to, byte[] assetID, BigInteger amount)
+        {
+            if (IsPythonNEP5(assetID))
+            {
+                TransferPythonNEP5(from, to, assetID, amount);
+                return;
+            }
+
+            // Transfer token
+            var args = new object[] { from, to, amount };
+            var contract = (NEP5Contract)assetID.ToDelegate();
+            if (!(bool)contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
+        }
+
+        private static void TransferPythonNEP5(byte[] from, byte[] to, byte[] assetID, BigInteger amount)
+        {
+            // Transfer token (with compiler changes)
+            var args = new object[] { from, to, amount };
+            var contract = (NEP5Contract)assetID.ToDelegate();
+            if (!(bool)contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
+        }
+
+        private static byte[] GetWhitelistKey(byte[] assetID, int whitelistEnum)
+        {
+            if (whitelistEnum == 0) return OldWhitelistKey(assetID);
+            if (whitelistEnum == 1) return NewWhitelistKey(assetID);
+            if (whitelistEnum == 2) return PytWhitelistKey(assetID);
+            throw new ArgumentOutOfRangeException();
         }
 
         // Unique hash for an offer
@@ -1164,6 +1190,7 @@ namespace switcheo
         private static byte[] WithdrawingKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
+        private static byte[] PytWhitelistKey(byte[] assetID) => "pytNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
         private static byte[] CancelAnnounceKey(byte[] offerHash) => "cancelAnnounce".AsByteArray().Concat(offerHash);
         private static byte[] WithdrawAnnounceKey(byte[] originator, byte[] assetID) => "withdrawAnnounce".AsByteArray().Concat(originator).Concat(assetID);
