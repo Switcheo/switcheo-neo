@@ -310,7 +310,7 @@ namespace switcheo
                 {
                     if (args.Length != 3) return false;
                     if (ExecutionEngine.CallingScriptHash != MctAssetID) return false;
-                    if (!ReceivedNEP5((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
+                    if (!ReceivedNEP5((byte[])args[0], MctAssetID, (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
                     return true;
                 }
                 if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce)
