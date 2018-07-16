@@ -189,31 +189,33 @@ namespace switcheo
 
                 if (withdrawalStage == Mark)
                 {
-                    // Check that inputs are not already reserved (We must not re-use a utxo that is already reserved)
+                    // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
                     foreach (var i in inputs)
                     {
-                        if (Storage.Get(Context(), WithdrawalKey(i.PrevHash)).Length > 0) return false;
+                        if (Storage.Get(Context(), WithdrawalAddressForTransactionKey(i.PrevHash)).Length > 0) return false;
                     }
 
                     // Check that there is at most 2 outputs (the withdrawing output and the change)
                     if (outputs.Length > 2) return false;
 
-                    // Verify withdrawal amount
+                    // Check amount > 0, balance enough and whether there is an existing withdraw as withdraw can only happen 1 at a time for each asset
                     var amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : outputs[0].Value;
                     if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount)) return false;
 
-                    // Check that the transaction is signed by the withdrawer SC or pre-announced + signed by the user
-                    if (!Runtime.CheckWitness(GetWithdrawerAddress()))
+                    // Check that the transaction is signed by the withdraw coordinator
+                    if (!Runtime.CheckWitness(GetWithdrawCoordinatorAddress()))
                     {
+                        // If not signed by withdraw coordinator it must be pre-announced + signed by the user
                         if (!Runtime.CheckWitness(withdrawingAddr)) return false;
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
                     }
                     
-                    // Check inputs and outputs
+                    // Check inputs and outputs make sense for NEP-5 withdrawals or System Asset withdrawals
                     if (isWithdrawingNEP5)
                     {
-                        // Check that NEP5 withdrawals don't use contract assets
+                        // Accept only 1 input so we check for only 1 input
                         if (references.Length != 1) return false;
+                        // Check that NEP5 withdrawals don't use contract's system assets
                         if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                     }
                     else
@@ -221,7 +223,7 @@ namespace switcheo
                         // Initialize totals for burn check
                         ulong totalIn = 0;
                         ulong totalOut = 0;
-                        // Check that assets are from contract
+                        // Check that all inputs are from contract
                         foreach (var i in references)
                         {
                             totalIn += (ulong)i.Value;
@@ -259,9 +261,9 @@ namespace switcheo
                     }
                     else
                     {
-                        // Check that utxo is from a reserved txn
-                        if (Storage.Get(Context(), WithdrawalKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
-                        // Check that the correct utxo of the txn is used
+                        // Check that UTXO is from a reserved txn
+                        if (Storage.Get(Context(), WithdrawalAddressForTransactionKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
+                        // Check that the correct UTXO of the txn is used
                         if (inputs[0].PrevIndex != 0) return false;
 
                         // Check withdrawal destination
@@ -293,7 +295,7 @@ namespace switcheo
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
                 if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
-                if (operation == "getWithdrawerAddress") return GetWithdrawerAddress();
+                if (operation == "getWithdrawerAddress") return GetWithdrawCoordinatorAddress();
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
 
                 // == Execute == 
@@ -432,7 +434,7 @@ namespace switcheo
             return Storage.Get(Context(), "coordinatorAddress");
         }
 
-        private static byte[] GetWithdrawerAddress()
+        private static byte[] GetWithdrawCoordinatorAddress()
         {
             return Storage.Get(Context(), "withdrawerAddress");
         }
@@ -501,6 +503,7 @@ namespace switcheo
         private static bool AddToWhitelist(byte[] scriptHash, bool isNewNEP5)
         {
             if (scriptHash.Length != 20) return false;
+            // TODO: Guard against adding to multiple lists?
             var key = isNewNEP5 ? NewWhitelistKey(scriptHash) : OldWhitelistKey(scriptHash);
             Storage.Put(Context(), key, "1");
             EmitAddedToWhitelist(scriptHash, isNewNEP5);
@@ -833,7 +836,7 @@ namespace switcheo
 
             // Don't deposit if this is a withdrawal
             var coordinatorAddress = GetCoordinatorAddress();
-            var withdrawerAddress = GetWithdrawerAddress();
+            var withdrawerAddress = GetWithdrawCoordinatorAddress();
             foreach (var i in references)
             {
                 if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
@@ -917,7 +920,7 @@ namespace switcheo
         {
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var withdrawalStage = GetWithdrawalStage(currentTxn);
-            var withdrawingAddr = GetWithdrawalAddress(currentTxn);
+            var withdrawingAddr = GetWithdrawalAddress(currentTxn); // Not validated, anyone can help anyone do step 2 of withdrawal
             var assetID = GetWithdrawalAsset(currentTxn);
             var isWithdrawingNEP5 = assetID.Length == 20;
             var inputs = currentTxn.GetInputs();
@@ -930,37 +933,43 @@ namespace switcheo
 
                 bool withdrawalAnnounced = IsWithdrawalAnnounced(withdrawingAddr, assetID, amount);
 
-                if (!Runtime.CheckWitness(GetWithdrawerAddress()) && !withdrawalAnnounced)
+                // Only pass if withdraw coordinator signed or withdrawal is announced
+                if (!(Runtime.CheckWitness(GetWithdrawCoordinatorAddress()) || withdrawalAnnounced))
                 {
-                    Runtime.Log("Withdrawer witness missing or withdrawal unannounced");
+                    Runtime.Log("Withdraw coordinator witness missing or withdrawal unannounced");
                     return false;
                 }
 
+                // Check again that: amount > 0, balance enough and whether there is an existing withdraw as withdraw can only happen 1 at a time for each asset
+                // Because things might have changed between verification phase and application phase
                 if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount))
                 {
                     Runtime.Log("Verify withdrawal failed");
                     return false;
                 }
 
+                // Attempt to reduce the balance
                 if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonPrepareWithdrawal))
                 {
                     Runtime.Log("Reduce balance for withdrawal failed");
                     return false;
                 }
 
+                // Clear withdrawing announcement by user for this asset if any withdrawal is successful because it would mean that withdrawal is working correctly and exchange is in action
                 var key = WithdrawAnnounceKey(withdrawingAddr, assetID);
                 if (key.Length > 0)
                 {
                     Storage.Delete(Context(), key);
                 }
 
+                // Reserve the transaction hash for the user if withdrawing system assets
                 if (!isWithdrawingNEP5)
                 {
-                    // Reserve utxo for the transaction hash if withdrawing system assets
-                    Storage.Put(Context(), WithdrawalKey(currentTxn.Hash), withdrawingAddr);
+                    Storage.Put(Context(), WithdrawalAddressForTransactionKey(currentTxn.Hash), withdrawingAddr);
                 }
 
-                Storage.Put(Context(), WithdrawKey(withdrawingAddr, assetID), amount);
+                // Save withdrawing assetID and amount for user to be used later
+                Storage.Put(Context(), WithdrawingKey(withdrawingAddr, assetID), amount);
                 EmitWithdrawing(withdrawingAddr, assetID, amount);
 
                 return true;
@@ -974,13 +983,13 @@ namespace switcheo
                     // Check old whitelist
                     if (IsWhitelistedOldNEP5(assetID))
                     {
-                        // We must pass witness for old NEP-5 transfer to succeed
+                        // This contract must pass witness for old NEP-5 transfer to succeed
                         if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
                     }
                     // Check new whitelist
                     else
                     {
-                        // New-style NEP-5 transfers or arbitrary invokes SHOULD NOT pass contract witness checks
+                        // New-style NEP-5 transfers or arbitrary invokes SHOULD NOT pass this contract's witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
                         // Allow only if in whitelist or arbitrary dynamic invoke is allowed
                         if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
@@ -995,11 +1004,11 @@ namespace switcheo
                 else
                 {
                     // Clean up reservations
-                    var key = WithdrawalKey(inputs[0].PrevHash);
+                    var key = WithdrawalAddressForTransactionKey(inputs[0].PrevHash);
                     Storage.Delete(Context(), key);
                 }
 
-                Storage.Delete(Context(), WithdrawKey(withdrawingAddr, assetID));
+                Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
                 EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                 return true;
             }
@@ -1025,7 +1034,7 @@ namespace switcheo
 
         private static BigInteger GetWithdrawingAmount(byte[] originator, byte[] assetID)
         {
-            return Storage.Get(Context(), WithdrawKey(originator, assetID)).AsBigInteger();
+            return Storage.Get(Context(), WithdrawingKey(originator, assetID)).AsBigInteger();
         }
 
         private static byte[] GetWithdrawalAddress(Transaction transaction)
@@ -1123,7 +1132,7 @@ namespace switcheo
             if (traderAddress == coordinatorAddress) return false;
 
             // Check that the trader is not also the withdrawer
-            if (traderAddress == GetWithdrawerAddress()) return false;
+            if (traderAddress == GetWithdrawCoordinatorAddress()) return false;
 
             return true;
         }
@@ -1144,8 +1153,8 @@ namespace switcheo
         // Keys
         private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => "balance".AsByteArray().Concat(originator).Concat(assetID);
-        private static byte[] WithdrawalKey(byte[] transactionHash) => "withdrawalUTXO".AsByteArray().Concat(transactionHash);
-        private static byte[] WithdrawKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
+        private static byte[] WithdrawalAddressForTransactionKey(byte[] transactionHash) => "withdrawalUTXO".AsByteArray().Concat(transactionHash);
+        private static byte[] WithdrawingKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
