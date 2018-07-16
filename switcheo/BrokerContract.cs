@@ -97,6 +97,7 @@ namespace switcheo
         private static readonly byte[] Zero = { 0x00 };
         private static readonly byte[] NeoAssetID = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
+        private static readonly byte[] MctAssetID = { };
         private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
 
         // Reason Code for balance changes
@@ -299,10 +300,17 @@ namespace switcheo
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
 
                 // == Execute == 
-                if (operation == "deposit") // NEP-5 ONLY + backwards compatibility before nep-7 (originator, assetID, amount)
+                if (operation == "deposit") // (originator, assetID, amount)
                 {
                     if (args.Length != 3) return false;
                     if (!Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) return false;
+                    return true;
+                }
+                if (operation == "onTokenTransfer") // deposit for MCT contract only (originator, assetID, amount)
+                {
+                    if (args.Length != 3) return false;
+                    if (ExecutionEngine.CallingScriptHash != MctAssetID) return false;
+                    if (!ReceivedNEP5((byte[])args[0], (byte[])args[1], (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
                     return true;
                 }
                 if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce)
@@ -795,22 +803,10 @@ namespace switcheo
             }
             else if (assetID.Length == 20)
             {
-                // Verify that deposit is authorized
-                if (!CheckTradeWitnesses(originator)) return false;
-                if (GetState() != Active) return false;
-
-                // Check that the contract is safe
-                if (!(IsWhitelistedOldNEP5(assetID) || IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
-
-                // Check address and amounts
-                if (originator.Length != 20) return false;
-                if (amount < 1) return false;
-
                 // Update balances first
-                IncreaseBalance(originator, assetID, amount, ReasonDeposit);
-                EmitDeposited(originator, assetID, amount);
+                if (!ReceivedNEP5(originator, assetID, amount)) return false;
 
-                // Just transfer immediately
+                // Just transfer immediately and throw on failure
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
                 var Contract = (NEP5Contract)assetID.ToDelegate();
                 if (!(bool)Contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
@@ -820,6 +816,27 @@ namespace switcheo
 
             // Unknown asset category
             return false;
+        }
+
+        // Received NEP-5 tokens
+        private static bool ReceivedNEP5(byte[] originator, byte[] assetID, BigInteger amount)
+        {
+            // Verify that deposit is authorized
+            if (!CheckTradeWitnesses(originator)) return false;
+            if (GetState() != Active) return false;
+
+            // Check that the contract is safe
+            if (!(IsWhitelistedOldNEP5(assetID) || IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
+
+            // Check address and amounts
+            if (originator.Length != 20) return false;
+            if (amount < 1) return false;
+
+            // Update balances first
+            IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+            EmitDeposited(originator, assetID, amount);
+
+            return true;
         }
 
         // Received system asset
