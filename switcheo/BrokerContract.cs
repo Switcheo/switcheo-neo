@@ -312,17 +312,17 @@ namespace switcheo
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5]);
                     return MakeOffer(offer);
                 }
-                if (operation == "fillOffer") // fillerAddress, '', offerHash, amountToTake, takerFeeAssetID, takerFeeAmount)
+                if (operation == "fillOffer") // fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount)
                 {
                     if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
                     return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3], (BigInteger)args[4], (bool)args[5]);
                 }
-                if (operation == "cancelOffer") // ('', offerHash)
+                if (operation == "cancelOffer") // (offerHash)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 2) return false;
-                    return CancelOffer((byte[])args[1]);
+                    if (args.Length != 1) return false;
+                    return CancelOffer((byte[])args[0]);
                 }
                 if (operation == "withdraw") // ()
                 {
