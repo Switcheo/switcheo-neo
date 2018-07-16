@@ -806,17 +806,16 @@ namespace switcheo
                 if (originator.Length != 20) return false;
                 if (amount < 1) return false;
 
+                // Update balances first
+                IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+                EmitDeposited(originator, assetID, amount);
+
                 // Just transfer immediately
                 var args = new object[] { originator, ExecutionEngine.ExecutingScriptHash, amount };
                 var Contract = (NEP5Contract)assetID.ToDelegate();
-                var transferSuccessful = (bool)Contract("transfer", args);
-                if (transferSuccessful)
-                {
-                    IncreaseBalance(originator, assetID, amount, ReasonDeposit);
-                    EmitDeposited(originator, assetID, amount);
-                }
+                if (!(bool)Contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
 
-                return transferSuccessful;
+                return true;
             }
 
             // Unknown asset category
@@ -978,6 +977,9 @@ namespace switcheo
             {
                 var amount = GetWithdrawingAmount(withdrawingAddr, assetID);
 
+                Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
+                EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
+
                 if (isWithdrawingNEP5)
                 {
                     // Check old whitelist
@@ -995,11 +997,7 @@ namespace switcheo
                         if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                     }
                     // Execute withdraw
-                    if (!WithdrawNEP5(withdrawingAddr, assetID, amount))
-                    {
-                        Runtime.Log("Tried to withdraw NEP-5 but failed!");
-                        return false;
-                    }
+                    WithdrawNEP5(withdrawingAddr, assetID, amount);
                 }
                 else
                 {
@@ -1008,8 +1006,6 @@ namespace switcheo
                     Storage.Delete(Context(), key);
                 }
 
-                Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
-                EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                 return true;
             }
 
@@ -1021,13 +1017,7 @@ namespace switcheo
             // Transfer token
             var args = new object[] { ExecutionEngine.ExecutingScriptHash, address, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
-            bool transferSuccessful = (bool)contract("transfer", args);
-
-            if (!transferSuccessful)
-            {
-                Runtime.Log("Failed to transfer NEP-5 tokens!");
-                return false;
-            }
+            if (!(bool)contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
 
             return true;
         }
