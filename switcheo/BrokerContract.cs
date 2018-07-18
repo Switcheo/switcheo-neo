@@ -43,6 +43,9 @@ namespace switcheo
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger, byte[]> EmitWithdrawn; // (address, assetID, amount, utxoUsed)
 
+        [DisplayName("burnt")]
+        public static event Action<byte[], byte[], BigInteger> EmitBurnt; // (address, assetID, amount)
+
         [DisplayName("tradingFrozen")]
         public static event Action EmitTradingFrozen;
 
@@ -296,6 +299,7 @@ namespace switcheo
                 if (operation == "getState") return GetState();
                 if (operation == "getOffer") return GetOffer((byte[])args[0]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
+                if (operation == "getIsWhitelisted") return GetIsWhitelisted((byte[])args[0], (int)args[1]);  // (assetID, whitelistEnum)
                 if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
                 if (operation == "getWithdrawerAddress") return GetWithdrawCoordinatorAddress();
@@ -307,10 +311,11 @@ namespace switcheo
                     if (args.Length != 3) return false;
                     return Deposit((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
-                if (operation == "onTokenTransfer") // deposit for MCT contract only (originator, assetID, amount)
+                if (operation == "onTokenTransfer") // deposit for MCT contract only (from, to, amount)
                 {
                     if (args.Length != 3) return false;
                     if (ExecutionEngine.CallingScriptHash != MctAssetID) return false;
+                    if (ExecutionEngine.ExecutingScriptHash != (byte[])args[1]) return false;
                     if (!ReceivedNEP5((byte[])args[0], MctAssetID, (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
                     return true;
                 }
@@ -426,6 +431,12 @@ namespace switcheo
             if (address.Length != 20) throw new ArgumentOutOfRangeException();
             if (assetID.Length != 20 && assetID.Length != 32) throw new ArgumentOutOfRangeException();
             return Storage.Get(Context(), BalanceKey(address, assetID)).AsBigInteger();
+        }
+
+        private static bool GetIsWhitelisted(byte[] assetID, int whitelistEnum)
+        {
+            if (assetID.Length != 20) throw new ArgumentOutOfRangeException();
+            return Storage.Get(Context(), GetWhitelistKey(assetID, whitelistEnum)).Length > 0;
         }
 
         private static BigInteger GetAnnounceDelay()
@@ -665,7 +676,8 @@ namespace switcheo
                     IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
                 } else
                 {
-                    // TODO: emit burn event
+                    // Emit burnt event for easier client tracking
+                    EmitBurnt(fillerAddress, takerFeeAssetID, takerFeeAmount);
                 }
             }
 
@@ -807,7 +819,7 @@ namespace switcheo
                 // Update balances first
                 if (!ReceivedNEP5(originator, assetID, amount)) return false;
 
-                // Execute deposit
+                // Execute deposit to our contract (ExecutionEngine.ExecutingScriptHash)
                 TransferNEP5(originator, ExecutionEngine.ExecutingScriptHash, assetID, amount);
 
                 return true;
@@ -846,8 +858,8 @@ namespace switcheo
             var outputs = currentTxn.GetOutputs();
             var references = currentTxn.GetReferences();
 
-            // Check for double deposits
-            if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 1) return false;
+            // Check if existing deposit flag is present
+            if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 0) return false;
 
             // Don't deposit if this is a withdrawal
             var coordinatorAddress = GetCoordinatorAddress();
