@@ -195,7 +195,7 @@ namespace switcheo
                     // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
                     foreach (var i in inputs)
                     {
-                        if (Storage.Get(Context(), WithdrawalAddressForTransactionKey(i.PrevHash)).Length > 0) return false;
+                        if (Storage.Get(Context(), WithdrawalAddressForTransactionKey(i.PrevHash)).Length > 0 && i.PrevIndex == 0) return false;
                     }
 
                     // Check that there is at most 2 outputs (the withdrawing output and the change)
@@ -998,6 +998,9 @@ namespace switcheo
 
                 if (isWithdrawingNEP5)
                 {
+                    // Check if already withdrawn
+                    if (amount <= 0) return false;
+
                     // Check old whitelist
                     if (IsWhitelistedOldNEP5(assetID))
                     {
