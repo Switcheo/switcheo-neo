@@ -67,8 +67,8 @@ namespace switcheo
         [DisplayName("coordinatorSet")]
         public static event Action<byte[]> EmitCoordinatorSet; // (address)
 
-        [DisplayName("withdrawerSet")]
-        public static event Action<byte[]> EmitWithdrawerSet; // (address)
+        [DisplayName("withdrawCoordinatorSet")]
+        public static event Action<byte[]> EmitWithdrawCoordinatorSet; // (address)
 
         [DisplayName("announceDelaySet")]
         public static event Action<BigInteger> EmitAnnounceDelaySet; // (delay)
@@ -243,7 +243,7 @@ namespace switcheo
                             if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
                             if (o.AssetId != assetID) return false;
                         }
-                        // Check that only required inputs are used
+                        // Check that only required inputs are used (if deleting the last input causes the totalIn to still be > amount that means the last input was useless and is wasting UTXOs)
                         if (totalIn - (ulong)references[inputs.Length - 1].Value > amount) return false;
                         // Ensure that nothing is burnt
                         if (totalIn != totalOut) return false;
@@ -302,7 +302,7 @@ namespace switcheo
                 if (operation == "getIsWhitelisted") return GetIsWhitelisted((byte[])args[0], (int)args[1]);  // (assetID, whitelistEnum)
                 if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
-                if (operation == "getWithdrawerAddress") return GetWithdrawCoordinatorAddress();
+                if (operation == "getWithdrawCoordinatorAddress") return GetWithdrawCoordinatorAddress();
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
 
                 // == Execute == 
@@ -386,10 +386,10 @@ namespace switcheo
                     if (args.Length != 1) return false;
                     return SetCoordinatorAddress((byte[])args[0]); ;
                 }
-                if (operation == "setWithdrawerAddress")
+                if (operation == "setWithdrawCoordinatorAddress")
                 {
                     if (args.Length != 1) return false;
-                    return SetWithdrawerAddress((byte[])args[0]); ;
+                    return SetWithdrawCoordinatorAddress((byte[])args[0]); ;
                 }
                 if (operation == "setFeeAddress")
                 {
@@ -456,7 +456,7 @@ namespace switcheo
 
         private static byte[] GetWithdrawCoordinatorAddress()
         {
-            return Storage.Get(Context(), "withdrawerAddress");
+            return Storage.Get(Context(), "withdrawCoordinatorAddress");
         }
 
         private static Offer GetOffer(byte[] offerHash)
@@ -473,13 +473,13 @@ namespace switcheo
          * Control *
          ***********/
 
-        private static bool Initialize(byte[] feeAddress, byte[] coordinatorAddress, byte[] withdrawerAddress)
+        private static bool Initialize(byte[] feeAddress, byte[] coordinatorAddress, byte[] withdrawCoordinatorAddress)
         {
             if (GetState() != Pending) return false;
 
             if (!SetFeeAddress(feeAddress)) throw new Exception("Failed to set fee address");
             if (!SetCoordinatorAddress(coordinatorAddress)) throw new Exception("Failed to set the coordinator");
-            if (!SetWithdrawerAddress(withdrawerAddress)) throw new Exception("Failed to set the withdrawer");
+            if (!SetWithdrawCoordinatorAddress(withdrawCoordinatorAddress)) throw new Exception("Failed to set the withdrawCoordinator");
             if (!SetAnnounceDelay(maxAnnounceDelay)) throw new Exception("Failed to announcement delay");
 
             Storage.Put(Context(), "state", Active);
@@ -504,11 +504,11 @@ namespace switcheo
             return true;
         }
 
-        private static bool SetWithdrawerAddress(byte[] withdrawerAddress)
+        private static bool SetWithdrawCoordinatorAddress(byte[] withdrawCoordinatorAddress)
         {
-            if (withdrawerAddress.Length != 20) return false;
-            Storage.Put(Context(), "withdrawerAddress", withdrawerAddress);
-            EmitWithdrawerSet(withdrawerAddress);
+            if (withdrawCoordinatorAddress.Length != 20) return false;
+            Storage.Put(Context(), "withdrawCoordinatorAddress", withdrawCoordinatorAddress);
+            EmitWithdrawCoordinatorSet(withdrawCoordinatorAddress);
             return true;
         }
 
@@ -523,7 +523,6 @@ namespace switcheo
         private static bool AddToWhitelist(byte[] scriptHash, int whitelistEnum)
         {
             if (scriptHash.Length != 20) return false;
-            // TODO: Guard against adding to multiple lists?
             var key = GetWhitelistKey(scriptHash, whitelistEnum);
             Storage.Put(Context(), key, "1");
             EmitAddedToWhitelist(scriptHash, whitelistEnum);
@@ -863,12 +862,12 @@ namespace switcheo
 
             // Don't deposit if this is a withdrawal
             var coordinatorAddress = GetCoordinatorAddress();
-            var withdrawerAddress = GetWithdrawCoordinatorAddress();
+            var withdrawCoordinatorAddress = GetWithdrawCoordinatorAddress();
             foreach (var i in references)
             {
                 if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                 if (i.ScriptHash == coordinatorAddress) return false;
-                if (i.ScriptHash == withdrawerAddress) return false;
+                if (i.ScriptHash == withdrawCoordinatorAddress) return false;
             }
 
             // Only deposit those assets not from contract
@@ -1149,7 +1148,7 @@ namespace switcheo
             // Check that the trader is not also the coordinator
             if (traderAddress == coordinatorAddress) return false;
 
-            // Check that the trader is not also the withdrawer
+            // Check that the trader is not also the withdrawCoordinator
             if (traderAddress == GetWithdrawCoordinatorAddress()) return false;
 
             return true;
