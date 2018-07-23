@@ -58,6 +58,9 @@ namespace switcheo
         [DisplayName("removedFromWhitelist")]
         public static event Action<byte[], int> EmitRemovedFromWhitelist; // (scriptHash, whitelistEnum)
 
+        [DisplayName("whitelistSealed")]
+        public static event Action<int> EmitWhitelistSealed; // (whitelistEnum)
+
         [DisplayName("arbitraryInvokeAllowed")]
         public static event Action EmitArbitraryInvokeAllowed;
 
@@ -304,6 +307,8 @@ namespace switcheo
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
                 if (operation == "getWithdrawCoordinatorAddress") return GetWithdrawCoordinatorAddress();
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
+                if (operation == "getAnnouncedWithdraw") return GetAnnouncedWithdraw((byte[])args[0], (byte[])args[1]);  // (originator, assetID)
+                if (operation == "getAnnouncedCancel") return GetAnnouncedCancel((byte[])args[0]);  // (offerHash)
 
                 // == Execute == 
                 if (operation == "deposit") // (originator, assetID, amount)
@@ -406,6 +411,11 @@ namespace switcheo
                     if (args.Length != 2) return false;
                     return RemoveFromWhitelist((byte[])args[0], (int)args[1]);
                 }
+                if (operation == "sealWhitelist")
+                {
+                    if (args.Length != 1) return false;
+                    return SealWhitelist((int)args[0]);
+                }
                 if (operation == "setArbitraryInvokeAllowed")
                 {
                     Storage.Put(Context(), "arbitraryInvokeAllowed", Active);
@@ -469,6 +479,20 @@ namespace switcheo
             return (Offer)offerData.Deserialize();
         }
 
+        private static WithdrawInfo GetAnnouncedWithdraw(byte[] withdrawingAddr, byte[] assetID)
+        {
+            var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
+            if (announce.Length == 0) return new WithdrawInfo(); // not announced
+            return (WithdrawInfo)announce.Deserialize();
+        }
+
+        private static BigInteger GetAnnouncedCancel(byte[] offerHash)
+        {
+            var announceTime = Storage.Get(Context(), CancelAnnounceKey(offerHash));
+            if (announceTime.Length == 0) return -1; // not announced
+            return announceTime.AsBigInteger();
+        }
+
         /***********
          * Control *
          ***********/
@@ -523,8 +547,9 @@ namespace switcheo
         private static bool AddToWhitelist(byte[] scriptHash, int whitelistEnum)
         {
             if (scriptHash.Length != 20) return false;
+            if (IsWhitelistSealed(whitelistEnum)) return false;
             var key = GetWhitelistKey(scriptHash, whitelistEnum);
-            Storage.Put(Context(), key, "1");
+            Storage.Put(Context(), key, Active);
             EmitAddedToWhitelist(scriptHash, whitelistEnum);
             return true;
         }
@@ -532,9 +557,17 @@ namespace switcheo
         private static bool RemoveFromWhitelist(byte[] scriptHash, int whitelistEnum)
         {
             if (scriptHash.Length != 20) return false;
+            if (IsWhitelistSealed(whitelistEnum)) return false;
             var key = GetWhitelistKey(scriptHash, whitelistEnum);
             Storage.Delete(Context(), key);
             EmitRemovedFromWhitelist(scriptHash, whitelistEnum);
+            return true;
+        }
+
+        private static bool SealWhitelist(int whitelistEnum)
+        {
+            Storage.Put(Context(), GetWhitelistSealedKey(whitelistEnum), Active);
+            EmitWhitelistSealed(whitelistEnum);
             return true;
         }
 
@@ -1004,12 +1037,9 @@ namespace switcheo
             {
                 var amount = GetWithdrawingAmount(withdrawingAddr, assetID);
 
-                Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
-                EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
-
                 if (isWithdrawingNEP5)
                 {
-                    // Check if already withdrawn
+                    // Check if already withdrawn for NEP-5 only as no double withdraw of system assets are secured by reserved utxos
                     if (amount <= 0) return false;
 
                     // Check old whitelist
@@ -1027,10 +1057,15 @@ namespace switcheo
                         if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                     }
                     // Execute withdrawal
+                    Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
+                    EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                     TransferNEP5(ExecutionEngine.ExecutingScriptHash, withdrawingAddr, assetID, amount);
                 }
                 else
                 {
+                    // Execute withdrawal
+                    Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
+                    EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                     // Clean up reservations
                     var key = WithdrawalAddressForTransactionKey(inputs[0].PrevHash);
                     Storage.Delete(Context(), key);
@@ -1134,6 +1169,11 @@ namespace switcheo
             return Storage.Get(Context(), PytWhitelistKey(assetID)).Length > 0;
         }
 
+        private static bool IsWhitelistSealed(int whitelistEnum)
+        {
+            return Storage.Get(Context(), GetWhitelistSealedKey(whitelistEnum)).Length > 0;
+        }
+
         private static bool CheckTradeWitnesses(byte[] traderAddress)
         {
             // Cache coordinator address for checks
@@ -1181,6 +1221,14 @@ namespace switcheo
             if (whitelistEnum == 0) return OldWhitelistKey(assetID);
             if (whitelistEnum == 1) return NewWhitelistKey(assetID);
             if (whitelistEnum == 2) return PytWhitelistKey(assetID);
+            throw new ArgumentOutOfRangeException();
+        }
+
+        private static byte[] GetWhitelistSealedKey(int whitelistEnum)
+        {
+            if (whitelistEnum == 0) return "oldWhitelistSealed".AsByteArray();
+            if (whitelistEnum == 1) return "newWhitelistSealed".AsByteArray();
+            if (whitelistEnum == 2) return "pytWhitelistSealed".AsByteArray();
             throw new ArgumentOutOfRangeException();
         }
 
