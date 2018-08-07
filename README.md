@@ -2,6 +2,8 @@
 
 An implementation of a NEO decentralized exchange
 
+# NOTE: This README is outdated and refers to V1 Contract and will be updated soon to better reflect the V2 contract contents
+
 ## Usage
 
 There are 4 main operations for this DApp:
@@ -11,7 +13,7 @@ There are 4 main operations for this DApp:
     This allows users to make a asset swap offer on the contract.
 
     The params required are:
-    
+
     1. script hash of the offer maker (invoking user)
     2. script hash of the asset being offered
     3. amount of asset being offered
@@ -47,7 +49,7 @@ There are 4 main operations for this DApp:
     The params required are:
 
     1. offer hash to be cancelled
-    
+
     Once invoked, the offer will be cancelled and any remaining balance will be credited to the user balance for withdrawal in a second transaction.
 
 - withdrawAssets
@@ -61,7 +63,7 @@ There are 4 main operations for this DApp:
     3. amount of asset to withdraw
 
     For SystemAssets, params are not required, but the transaction must be invoked with a TransactionAttribute of Usage `0xd1` and Data `0x01`. We chose an implementation which uses transaction attributes instead of "method arguments" to prevent double withdrawals before main net deployment.
-    
+
     Our implementation currently does not allow a transfer trading of this balance and this operation must always be called to make use of the swapped asset.
 
 ### Offer listing
@@ -75,30 +77,13 @@ In this way, the list can be traversed entirely, and a order book can be display
 
 ## Example
 
-Please see this video for an example: https://www.youtube.com/watch?v=sVu5fGBeUt8
-Or test on TestNet client at http://switcheo.network
+Test on beta client at V2 Testnet at the bottom right https://beta.switcheo.exchange
+Or trade on directly on mainnet https://www.switcheo.exchange
 
 ## Future work
 
-There remains certain TODOs that are incomplete in this MVP. However, we believe we have solutions for any incomplete issue.
-
-This are:
-
-- Prevention of double withdrawals
-
-  An untested implementation of preventing double withdrawal is on our code repository branch here: https://github.com/ConjurTech/switcheo/blob/no-double-withdraw/switcheo/BrokerContract.cs
-
-  This uses a mark and withdraw strategy, with backtracking of the blockchain to the marked point to ensure double withdrawal does not happen.
+There remains certain TODOs that are incomplete in V2.
 
 - Usage of DynamicCall
 
   We hardcoded all known NEP-5 tokens in our contract as `Appcall` can only be done statically at the moment. We hope to push for the implementation of `DynamicCall` in the vm / compiler so that the contract does not need to be updated.
-
-- Refund of failed verifications
-
-  This will be done before mainnet deployment.
-
-- Runtime.Notify
-  
-  We did not implement this yet due to compiler issues and uncertainty about how this will be used in future. Once confirmed, we can use this to interact with clients / other exchanges before main net deployment.
-
