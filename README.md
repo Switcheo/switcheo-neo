@@ -2,7 +2,11 @@
 
 An implementation of a NEO decentralized exchange
 
-# NOTE: This README is outdated and refers to V1 Contract and will be updated soon to better reflect the V2 contract contents
+## Manual Withdrawal from V2 Contract
+
+[Read wiki here](https://github.com/ConjurTech/switcheo/wiki/Manual-Withdraws-(Direct-from-V2-Smart-Contract))
+
+# NOTE: The README below is outdated and refers to V1 Contract and will be updated soon to better reflect the V2 contract contents
 
 ## Usage
 
