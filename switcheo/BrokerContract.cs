@@ -60,9 +60,6 @@ namespace switcheo
         [DisplayName("whitelistSealed")]
         public static event Action<int> EmitWhitelistSealed; // (whitelistEnum)
 
-        [DisplayName("arbitraryInvokeAllowed")]
-        public static event Action EmitArbitraryInvokeAllowed;
-
         [DisplayName("feeAddressSet")]
         public static event Action<byte[]> EmitFeeAddressSet; // (address)
 
@@ -197,42 +194,31 @@ namespace switcheo
 
                 if (withdrawalStage == Mark)
                 {
+                    // Check that this is a valid SystemAsset withdrawal
+                    ulong amount = (ulong)outputs[0].Value;
+                    if (amount == 0 || isWithdrawingNEP5) return false;
+
                     // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
                     foreach (var i in inputs)
                     {
                         if (i.PrevIndex == 0 && Storage.Get(Context(), WithdrawalAddressKey(i.PrevHash)).Length > 0) return false;
                     }
 
-                    // Ensure that nothing is burnt from the contract
+                    // Check that nothing is burnt from the contract
                     ulong totalIn = 0;
-                    ulong totalOut = 0;
-                    ulong amount = 0;
-                    ulong lastInput = 0;
                     foreach (var i in references)
                     {
                         if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash)
                         {
                             if (i.AssetId != assetID) return false;
                             totalIn += (ulong)i.Value;
-                            lastInput = (ulong)i.Value;
                         }
                     }
-                    foreach (var o in outputs)
-                    {
-                        totalOut += (ulong)o.Value;
-                        if (o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
-                        {
-                            if (o.AssetId != assetID) return false;
-                            if (amount == 0) amount = (ulong)o.Value;
-                            totalOut += (ulong)o.Value;
-                        }
-                    }
+                    ulong totalOut = SumOutputAmounts(outputs, ExecutionEngine.ExecutingScriptHash, assetID);
                     if (totalIn != totalOut) return false;
 
-                    // Check that this is a valid SystemAsset withdrawal
-                    if (amount == 0 || isWithdrawingNEP5) return false;
-
                     // Check that only required inputs are used (if deleting the last input causes the totalIn to still be > amount that means the last input was useless and is wasting UTXOs)
+                    ulong lastInput = (ulong)references[references.Length - 1].Value;
                     if (totalIn - lastInput > amount) return false;
 
                     // Check that the withdrawing address has sufficient contract balance
@@ -269,6 +255,7 @@ namespace switcheo
                     else
                     {
                         var reservedUTXO = inputs[0];
+
                         // Check that UTXO is reserved (i.e. not a change output, and is allocated to this withdrawing address)
                         if (reservedUTXO.PrevIndex != 0 || Storage.Get(Context(), WithdrawalAddressKey(reservedUTXO.PrevHash)) != withdrawingAddr) return false;
 
@@ -279,14 +266,7 @@ namespace switcheo
                         }
 
                         // Check that the withdrawal amount goes to the correct destination
-                        ulong totalOut = 0;
-                        foreach (var o in outputs)
-                        {
-                            if (o.ScriptHash == withdrawingAddr && o.AssetId == assetID)
-                            {
-                                totalOut += (ulong)o.Value;
-                            }
-                        }
+                        ulong totalOut = SumOutputAmounts(outputs, withdrawingAddr, assetID);
                         if (totalOut != (ulong)references[0].Value) return false;
                     }
 
@@ -432,12 +412,6 @@ namespace switcheo
                 {
                     if (args.Length != 1) return false;
                     return SealWhitelist((int)args[0]);
-                }
-                if (operation == "setArbitraryInvokeAllowed")
-                {
-                    Storage.Put(Context(), "arbitraryInvokeAllowed", Active);
-                    EmitArbitraryInvokeAllowed();
-                    return true;
                 }
             }
 
@@ -899,9 +873,6 @@ namespace switcheo
             if (!CheckTradeWitnesses(originator)) return false;
             if (GetState() != Active) return false;
 
-            // Check that the contract is safe
-            if (!(IsWhitelistedOldNEP5(assetID) || IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
-
             // Check address and amounts
             if (originator.Length != 20) return false;
             if (amount < 1) return false;
@@ -1076,8 +1047,6 @@ namespace switcheo
                     {
                         // New-style NEP-5 transfers or arbitrary invokes SHOULD NOT pass this contract's witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
-                        // Allow only if in whitelist or arbitrary dynamic invoke is allowed
-                        if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                     }
 
                     // Execute withdrawal
@@ -1143,11 +1112,23 @@ namespace switcheo
             throw new ArgumentNullException();
         }
 
+        private static ulong SumOutputAmounts(TransactionOutput[] outputs, byte[] address, byte[] assetID)
+        {
+            ulong totalOut = 0;
+            foreach (var o in outputs)
+            {
+                if (o.ScriptHash == address && o.AssetId == assetID)
+                {
+                    totalOut += (ulong)o.Value;
+                }
+            }
+            return totalOut;
+        }
+
         // Helpers
         private static StorageContext Context() => Storage.CurrentContext;
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
-        private static bool IsArbitraryInvokeAllowed() => Storage.Get(Context(), "arbitraryInvokeAllowed") == Active;
 
         private static bool IsWithdrawalAnnounced(byte[] withdrawingAddr, byte[] assetID, BigInteger amount)
         {
