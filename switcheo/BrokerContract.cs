@@ -158,7 +158,7 @@ namespace switcheo
             };
         }
 
-        private struct WithdrawInfo
+        private struct AnnouncementInfo
         {
             public BigInteger TimeStamp;
             public BigInteger Amount;
@@ -200,14 +200,42 @@ namespace switcheo
                     // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
                     foreach (var i in inputs)
                     {
-                        if (Storage.Get(Context(), WithdrawalAddressForTransactionKey(i.PrevHash)).Length > 0 && i.PrevIndex == 0) return false;
+                        if (i.PrevIndex == 0 && Storage.Get(Context(), WithdrawalAddressKey(i.PrevHash)).Length > 0) return false;
                     }
 
-                    // Check that there is at most 2 outputs (the withdrawing output and the change)
-                    if (outputs.Length > 2) return false;
+                    // Ensure that nothing is burnt from the contract
+                    ulong totalIn = 0;
+                    ulong totalOut = 0;
+                    ulong amount = 0;
+                    ulong lastInput = 0;
+                    foreach (var i in references)
+                    {
+                        if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                        {
+                            if (i.AssetId != assetID) return false;
+                            totalIn += (ulong)i.Value;
+                            lastInput = (ulong)i.Value;
+                        }
+                    }
+                    foreach (var o in outputs)
+                    {
+                        totalOut += (ulong)o.Value;
+                        if (o.ScriptHash == ExecutionEngine.ExecutingScriptHash)
+                        {
+                            if (o.AssetId != assetID) return false;
+                            if (amount == 0) amount = (ulong)o.Value;
+                            totalOut += (ulong)o.Value;
+                        }
+                    }
+                    if (totalIn != totalOut) return false;
 
-                    // Check amount > 0, balance enough and whether there is an existing withdraw as withdraw can only happen 1 at a time for each asset
-                    var amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : outputs[0].Value;
+                    // Check that this is a valid SystemAsset withdrawal
+                    if (amount == 0 || isWithdrawingNEP5) return false;
+
+                    // Check that only required inputs are used (if deleting the last input causes the totalIn to still be > amount that means the last input was useless and is wasting UTXOs)
+                    if (totalIn - lastInput > amount) return false;
+
+                    // Check that the withdrawing address has sufficient contract balance
                     if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount)) return false;
 
                     // Check that the transaction is signed by the withdraw coordinator
@@ -218,72 +246,57 @@ namespace switcheo
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
                     }
 
-                    // Check inputs and outputs make sense for NEP-5 withdrawals or System Asset withdrawals
-                    if (isWithdrawingNEP5)
-                    {
-                        // Accept only 1 input so we check for only 1 input
-                        if (references.Length != 1) return false;
-                        // Check that NEP5 withdrawals don't use contract's system assets
-                        if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
-                    }
-                    else
-                    {
-                        // Initialize totals for burn check
-                        ulong totalIn = 0;
-                        ulong totalOut = 0;
-                        // Check that all inputs are from contract
-                        foreach (var i in references)
-                        {
-                            totalIn += (ulong)i.Value;
-                            if (i.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
-                        }
-                        // Check that outputs are a valid self-send for system asset withdrawals
-                        // (In marking phase, all assets from contract should be sent to contract and nothing should go anywhere else)
-                        foreach (var o in outputs)
-                        {
-                            totalOut += (ulong)o.Value;
-                            if (o.ScriptHash != ExecutionEngine.ExecutingScriptHash) return false;
-                            if (o.AssetId != assetID) return false;
-                        }
-                        // Check that only required inputs are used (if deleting the last input causes the totalIn to still be > amount that means the last input was useless and is wasting UTXOs)
-                        if (totalIn - (ulong)references[inputs.Length - 1].Value > amount) return false;
-                        // Ensure that nothing is burnt
-                        if (totalIn != totalOut) return false;
-                    }
-
                     return true;
                 }
-                else if (withdrawalStage == Withdraw)
-                {
-                    // Check that there is only the neccessary inputs/outputs
-                    if (inputs.Length != 1) return false;
-                    if (outputs.Length != 1) return false;
 
+                if (withdrawalStage == Withdraw)
+                {
                     if (isWithdrawingNEP5)
                     {
                         // Check that NEP5 withdrawals don't use contract assets
-                        if (references[0].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        foreach (var i in references)
+                        {
+                            if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        }
+
                         // Check for whitelist if we are doing old style NEP-5 transfers;
                         // New style NEP-5 transfers SHOULD NOT require contract verification / witness
                         if (!IsWhitelistedOldNEP5(assetID)) return false;
+
+                        // Check that the withdrawing address has sufficient contract balance
+                        if (!VerifyWithdrawalValid(withdrawingAddr, assetID, GetWithdrawalAmount(currentTxn))) return false;
                     }
                     else
                     {
-                        // Check that UTXO is from a reserved txn
-                        if (Storage.Get(Context(), WithdrawalAddressForTransactionKey(inputs[0].PrevHash)) != withdrawingAddr) return false;
-                        // Check that the correct UTXO of the txn is used
-                        if (inputs[0].PrevIndex != 0) return false;
+                        var reservedUTXO = inputs[0];
+                        // Check that UTXO is reserved (i.e. not a change output, and is allocated to this withdrawing address)
+                        if (reservedUTXO.PrevIndex != 0 || Storage.Get(Context(), WithdrawalAddressKey(reservedUTXO.PrevHash)) != withdrawingAddr) return false;
 
-                        // Check withdrawal destination
-                        if (outputs[0].AssetId != assetID) return false;
-                        if (outputs[0].ScriptHash != withdrawingAddr) return false;
+                        // Check that no other UTXOs comes from the contract
+                        for (var i = 1; i < references.Length; i++)
+                        {
+                            if (references[i].ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                        }
+
+                        // Check that the withdrawal amount goes to the correct destination
+                        ulong totalOut = 0;
+                        foreach (var o in outputs)
+                        {
+                            if (o.ScriptHash == withdrawingAddr && o.AssetId == assetID)
+                            {
+                                totalOut += (ulong)o.Value;
+                            }
+                        }
+                        if (totalOut != (ulong)references[0].Value) return false;
                     }
 
                     return true;
                 }
+
                 return false;
             }
-            else if (Runtime.Trigger == TriggerType.Application)
+
+            if (Runtime.Trigger == TriggerType.Application)
             {
                 // == Init ==
                 if (operation == "initialize")
@@ -306,7 +319,7 @@ namespace switcheo
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
                 if (operation == "getWithdrawCoordinatorAddress") return GetWithdrawCoordinatorAddress();
                 if (operation == "getAnnounceDelay") return GetAnnounceDelay();
-                if (operation == "getAnnouncedWithdraw") return GetAnnouncedWithdraw((byte[])args[0], (byte[])args[1]);  // (originator, assetID)
+                if (operation == "getAnnouncedWithdraw") return GetAnnouncedWithdrawal((byte[])args[0], (byte[])args[1]);  // (originator, assetID)
                 if (operation == "getAnnouncedCancel") return GetAnnouncedCancel((byte[])args[0]);  // (offerHash)
 
                 // == Execute ==
@@ -388,17 +401,17 @@ namespace switcheo
                 if (operation == "setAnnounceDelay")
                 {
                     if (args.Length != 1) return false;
-                    return SetAnnounceDelay((BigInteger)args[0]); ;
+                    return SetAnnounceDelay((BigInteger)args[0]);
                 }
                 if (operation == "setCoordinatorAddress")
                 {
                     if (args.Length != 1) return false;
-                    return SetCoordinatorAddress((byte[])args[0]); ;
+                    return SetCoordinatorAddress((byte[])args[0]);
                 }
                 if (operation == "setWithdrawCoordinatorAddress")
                 {
                     if (args.Length != 1) return false;
-                    return SetWithdrawCoordinatorAddress((byte[])args[0]); ;
+                    return SetWithdrawCoordinatorAddress((byte[])args[0]);
                 }
                 if (operation == "setFeeAddress")
                 {
@@ -483,11 +496,11 @@ namespace switcheo
             return (Offer)offerData.Deserialize();
         }
 
-        private static WithdrawInfo GetAnnouncedWithdraw(byte[] withdrawingAddr, byte[] assetID)
+        private static AnnouncementInfo GetAnnouncedWithdrawal(byte[] withdrawingAddr, byte[] assetID)
         {
             var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
-            if (announce.Length == 0) return new WithdrawInfo(); // not announced
-            return (WithdrawInfo)announce.Deserialize();
+            if (announce.Length == 0) return new AnnouncementInfo(); // not announced
+            return (AnnouncementInfo)announce.Deserialize();
         }
 
         private static BigInteger GetAnnouncedCancel(byte[] offerHash)
@@ -966,9 +979,6 @@ namespace switcheo
             var balance = GetBalance(holderAddress, assetID);
             if (balance < amount) return false;
 
-            var withdrawingAmount = GetWithdrawingAmount(holderAddress, assetID);
-            if (withdrawingAmount > 0) return false;
-
             return true;
         }
 
@@ -978,7 +988,7 @@ namespace switcheo
 
             if (!VerifyWithdrawalValid(originator, assetID, amountToWithdraw)) return false;
 
-            WithdrawInfo withdrawInfo = new WithdrawInfo
+            AnnouncementInfo withdrawInfo = new AnnouncementInfo
             {
                 TimeStamp = Runtime.Time,
                 Amount = amountToWithdraw
@@ -1006,7 +1016,7 @@ namespace switcheo
             if (withdrawalStage == Mark)
             {
                 if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
-                BigInteger amount = isWithdrawingNEP5 ? GetWithdrawalAmount(currentTxn) : outputs[0].Value;
+                BigInteger amount = outputs[0].Value;
 
                 bool withdrawalAnnounced = IsWithdrawalAnnounced(withdrawingAddr, assetID, amount);
 
@@ -1039,25 +1049,20 @@ namespace switcheo
                     Storage.Delete(Context(), key);
                 }
 
-                // Reserve the transaction hash for the user if withdrawing system assets
-                if (!isWithdrawingNEP5)
-                {
-                    Storage.Put(Context(), WithdrawalAddressForTransactionKey(currentTxn.Hash), withdrawingAddr);
-                }
+                // Reserve the transaction hash for the user
+                Storage.Put(Context(), WithdrawalAddressKey(currentTxn.Hash), withdrawingAddr);
 
                 // Save withdrawing assetID and amount for user to be used later
-                Storage.Put(Context(), WithdrawingKey(withdrawingAddr, assetID), amount);
                 EmitWithdrawing(withdrawingAddr, assetID, amount);
 
                 return true;
             }
             else if (withdrawalStage == Withdraw)
             {
-                var amount = GetWithdrawingAmount(withdrawingAddr, assetID);
-
                 if (isWithdrawingNEP5)
                 {
-                    // Check if already withdrawn for NEP-5 only as no double withdraw of system assets are secured by reserved utxos
+                    // Get amount and check validity
+                    var amount = GetWithdrawalAmount(currentTxn);
                     if (amount <= 0) return false;
 
                     // Check old whitelist
@@ -1074,30 +1079,27 @@ namespace switcheo
                         // Allow only if in whitelist or arbitrary dynamic invoke is allowed
                         if (!(IsWhitelistedNewNEP5(assetID) || IsArbitraryInvokeAllowed())) return false;
                     }
+
                     // Execute withdrawal
-                    Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
-                    EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                     TransferNEP5(ExecutionEngine.ExecutingScriptHash, withdrawingAddr, assetID, amount);
+
+                    // Notify clients
+                    EmitWithdrawing(withdrawingAddr, assetID, amount);
+                    EmitWithdrawn(withdrawingAddr, assetID, amount, currentTxn.Hash);
                 }
                 else
                 {
-                    // Execute withdrawal
-                    Storage.Delete(Context(), WithdrawingKey(withdrawingAddr, assetID));
-                    EmitWithdrawn(withdrawingAddr, assetID, amount, inputs[0].PrevHash);
                     // Clean up reservations
-                    var key = WithdrawalAddressForTransactionKey(inputs[0].PrevHash);
-                    Storage.Delete(Context(), key);
+                    Storage.Delete(Context(), WithdrawalAddressKey(inputs[0].PrevHash));
+
+                    // Notify clients
+                    EmitWithdrawn(withdrawingAddr, assetID, outputs[0].Value, inputs[0].PrevHash); // FIXME: output value here may be wrong?
                 }
 
                 return true;
             }
 
             return false;
-        }
-
-        private static BigInteger GetWithdrawingAmount(byte[] originator, byte[] assetID)
-        {
-            return Storage.Get(Context(), WithdrawingKey(originator, assetID)).AsBigInteger();
         }
 
         private static byte[] GetWithdrawalAddress(Transaction transaction)
@@ -1151,7 +1153,7 @@ namespace switcheo
         {
             var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
             if (announce.Length == 0) return false; // not announced
-            var announceInfo = (WithdrawInfo)announce.Deserialize();
+            var announceInfo = (AnnouncementInfo)announce.Deserialize();
             var announceDelay = GetAnnounceDelay();
 
             return announceInfo.TimeStamp + announceDelay < Runtime.Time && announceInfo.Amount == amount;
@@ -1232,7 +1234,6 @@ namespace switcheo
         {
             if (whitelistEnum == 0) return "oldWhitelistSealed".AsByteArray();
             if (whitelistEnum == 1) return "newWhitelistSealed".AsByteArray();
-            if (whitelistEnum == 2) return "pytWhitelistSealed".AsByteArray();
             throw new ArgumentOutOfRangeException();
         }
 
@@ -1241,8 +1242,7 @@ namespace switcheo
         // Keys
         private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
         private static byte[] BalanceKey(byte[] originator, byte[] assetID) => "balance".AsByteArray().Concat(originator).Concat(assetID);
-        private static byte[] WithdrawalAddressForTransactionKey(byte[] transactionHash) => "withdrawalUTXO".AsByteArray().Concat(transactionHash);
-        private static byte[] WithdrawingKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
+        private static byte[] WithdrawalAddressKey(byte[] transactionHash) => "withdrawUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
