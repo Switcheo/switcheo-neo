@@ -166,7 +166,7 @@ namespace switcheo
 
         /// <summary>
         ///   This is the Switcheo smart contract entrypoint.
-        /// 
+        ///
         ///   Parameter List: 0710
         ///   Return List: 05
         /// </summary>
@@ -217,7 +217,7 @@ namespace switcheo
                         if (!Runtime.CheckWitness(withdrawingAddr)) return false;
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
                     }
-                    
+
                     // Check inputs and outputs make sense for NEP-5 withdrawals or System Asset withdrawals
                     if (isWithdrawingNEP5)
                     {
@@ -258,7 +258,7 @@ namespace switcheo
                     // Check that there is only the neccessary inputs/outputs
                     if (inputs.Length != 1) return false;
                     if (outputs.Length != 1) return false;
-                    
+
                     if (isWithdrawingNEP5)
                     {
                         // Check that NEP5 withdrawals don't use contract assets
@@ -309,7 +309,7 @@ namespace switcheo
                 if (operation == "getAnnouncedWithdraw") return GetAnnouncedWithdraw((byte[])args[0], (byte[])args[1]);  // (originator, assetID)
                 if (operation == "getAnnouncedCancel") return GetAnnouncedCancel((byte[])args[0]);  // (offerHash)
 
-                // == Execute == 
+                // == Execute ==
                 if (operation == "deposit") // (originator, assetID, amount)
                 {
                     if (args.Length != 3) return false;
@@ -623,7 +623,7 @@ namespace switcheo
             if (takerFeeAssetID.Length != 20 && takerFeeAssetID.Length != 32) return false;
             if (takerFeeAmount < 0) return false;
 
-            // Check that the offer still exists 
+            // Check that the offer still exists
             Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty)
             {
@@ -767,11 +767,11 @@ namespace switcheo
             Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty) return false;
 
-            // Check that transaction is signed by the canceller or trading is frozen 
+            // Check that transaction is signed by the canceller or trading is frozen
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             Storage.Put(Context(), CancelAnnounceKey(offerHash), Runtime.Time);
-            
+
             // Announce cancel intent to coordinator
             EmitCancelAnnounced(offer.MakerAddress, offerHash);
 
@@ -1002,7 +1002,7 @@ namespace switcheo
             var isWithdrawingNEP5 = assetID.Length == 20;
             var inputs = currentTxn.GetInputs();
             var outputs = currentTxn.GetOutputs();
-            
+
             if (withdrawalStage == Mark)
             {
                 if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
@@ -1180,13 +1180,6 @@ namespace switcheo
             return Storage.Get(Context(), NewWhitelistKey(assetID)).Length > 0;
         }
 
-        private static bool IsPythonNEP5(byte[] assetID)
-        {
-            if (assetID.Length != 20) return false;
-            if (assetID.AsBigInteger() == 0) return false;
-            return Storage.Get(Context(), PytWhitelistKey(assetID)).Length > 0;
-        }
-
         private static bool IsWhitelistSealed(int whitelistEnum)
         {
             return Storage.Get(Context(), GetWhitelistSealedKey(whitelistEnum)).Length > 0;
@@ -1214,21 +1207,7 @@ namespace switcheo
 
         private static void TransferNEP5(byte[] from, byte[] to, byte[] assetID, BigInteger amount)
         {
-            if (IsPythonNEP5(assetID))
-            {
-                TransferPythonNEP5(from, to, assetID, amount);
-                return;
-            }
-
             // Transfer token
-            var args = new object[] { from, to, amount };
-            var contract = (NEP5Contract)assetID.ToDelegate();
-            if (!(bool)contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
-        }
-
-        private static void TransferPythonNEP5(byte[] from, byte[] to, byte[] assetID, BigInteger amount)
-        {
-            // Transfer token (with compiler changes)
             var args = new object[] { from, to, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
             if (!(bool)contract("transfer", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
@@ -1246,7 +1225,6 @@ namespace switcheo
         {
             if (whitelistEnum == 0) return OldWhitelistKey(assetID);
             if (whitelistEnum == 1) return NewWhitelistKey(assetID);
-            if (whitelistEnum == 2) return PytWhitelistKey(assetID);
             throw new ArgumentOutOfRangeException();
         }
 
@@ -1258,18 +1236,7 @@ namespace switcheo
             throw new ArgumentOutOfRangeException();
         }
 
-        // Unique hash for an offer
-        private static byte[] Hash(Offer o)
-        {
-            var bytes = o.MakerAddress
-                .Concat(o.OfferAssetID)
-                .Concat(o.WantAssetID)
-                .Concat(o.OfferAmount.AsByteArray())
-                .Concat(o.WantAmount.AsByteArray())
-                .Concat(o.Nonce);
-
-            return Hash256(bytes);
-        }
+        private static byte[] Hash(Offer o) => Hash256(o.Nonce);
 
         // Keys
         private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
@@ -1278,7 +1245,6 @@ namespace switcheo
         private static byte[] WithdrawingKey(byte[] originator, byte[] assetID) => "withdrawing".AsByteArray().Concat(originator).Concat(assetID);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
-        private static byte[] PytWhitelistKey(byte[] assetID) => "pytNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
         private static byte[] CancelAnnounceKey(byte[] offerHash) => "cancelAnnounce".AsByteArray().Concat(offerHash);
         private static byte[] WithdrawAnnounceKey(byte[] originator, byte[] assetID) => "withdrawAnnounce".AsByteArray().Concat(originator).Concat(assetID);
