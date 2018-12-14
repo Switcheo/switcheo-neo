@@ -13,12 +13,10 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="Neo.ConvertTask.dll" />
-    <Content Include="..\packages\Neo.SmartContract.Framework.2.9.3\lib\net40\Neo.SmartContract.Framework.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-	</Content>
+    <None Include="..\packages\Neo.SmartContract.Framework.2.9.3\lib\net40\Neo.SmartContract.Framework.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   
-  <UsingTask AssemblyFile="Neo.ConvertTask.dll" TaskName="Neo.ConvertTask"/>
+  <UsingTask AssemblyFile="Neo.ConvertTask.dll" TaskName="Neo.ConvertTask" />
   
   <Target Name="ConvertTask" BeforeTargets="Build">
     <Message Text="Start NeoContract converter, Source File: $(TargetPath)" Importance="high">
