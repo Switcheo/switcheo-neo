@@ -113,14 +113,14 @@ namespace switcheo
         private static readonly byte[] ReasonMakerReceive = { 0x06 }; // Balance increased due to maker receiving his cut in the trade
         private static readonly byte[] ReasonContractTakerFee = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
         private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
-        private static readonly byte[] ReasonPrepareWithdrawal = { 0x09 }; // Balance reduced due to preparing for asset withdrawal
+        private static readonly byte[] ReasonWithdrawal = { 0x09 }; // Balance reduced due to withdrawal from contract
 
         // Reason Code for fill failures
         private static readonly byte[] ReasonOfferNotExist = { 0x21 }; // Empty Offer when trying to fill
-        private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 asset when trying to fill
+        private static readonly byte[] ReasonTakingLessThanOne = { 0x22 }; // Taking less than 1 token when trying to fill
         private static readonly byte[] ReasonFillerSameAsMaker = { 0x23 }; // Filler same as maker
         private static readonly byte[] ReasonTakingMoreThanAvailable = { 0x24 }; // Taking more than available in the offer at the moment
-        private static readonly byte[] ReasonFillingLessThanOne = { 0x25 }; // Filling less than 1 asset when trying to fill
+        private static readonly byte[] ReasonFillingLessThanOne = { 0x25 }; // Filling less than 1 token when trying to fill
         private static readonly byte[] ReasonNotEnoughBalanceOnFiller = { 0x26 }; // Not enough balance to give (wantAssetID) for what you want to take (offerAssetID)
         private static readonly byte[] ReasonNotEnoughBalanceOnNativeToken = { 0x27 }; // Not enough balance in native tokens to use
         private static readonly byte[] ReasonFeesMoreThanLimit = { 0x28 }; // Fees exceed 0.5%
@@ -981,12 +981,11 @@ namespace switcheo
             var withdrawingAddr = GetWithdrawalAddress(currentTxn); // Not validated, anyone can help anyone do step 2 of withdrawal
             var assetID = GetWithdrawalAsset(currentTxn);
             var isWithdrawingNEP5 = assetID.Length == 20;
-            var inputs = currentTxn.GetInputs();
-            var outputs = currentTxn.GetOutputs();
 
             if (withdrawalStage == Mark)
             {
                 if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                var outputs = currentTxn.GetOutputs();
                 BigInteger amount = outputs[0].Value;
 
                 bool withdrawalAnnounced = IsWithdrawalAnnounced(withdrawingAddr, assetID, amount);
@@ -1006,8 +1005,8 @@ namespace switcheo
                     return false;
                 }
 
-                // Attempt to reduce the balance
-                if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonPrepareWithdrawal))
+                // Attempt to reduce contract balance
+                if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal))
                 {
                     Runtime.Log("Reduce balance for withdrawal failed");
                     return false;
@@ -1023,16 +1022,17 @@ namespace switcheo
                 // Reserve the transaction hash for the user
                 Storage.Put(Context(), WithdrawalAddressKey(currentTxn.Hash), withdrawingAddr);
 
-                // Save withdrawing assetID and amount for user to be used later
+                // Notify clients
                 EmitWithdrawing(withdrawingAddr, assetID, amount);
 
                 return true;
             }
-            else if (withdrawalStage == Withdraw)
+
+            if (withdrawalStage == Withdraw)
             {
                 if (isWithdrawingNEP5)
                 {
-                    // Get amount and check validity
+                    // Check withdrawal validity
                     var amount = GetWithdrawalAmount(currentTxn);
                     if (amount <= 0) return false;
 
@@ -1049,6 +1049,13 @@ namespace switcheo
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
                     }
 
+                    // Attempt to reduce contract balance
+                    if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal))
+                    {
+                        Runtime.Log("Reduce balance for withdrawal failed");
+                        return false;
+                    }
+
                     // Execute withdrawal
                     TransferNEP5(ExecutionEngine.ExecutingScriptHash, withdrawingAddr, assetID, amount);
 
@@ -1058,11 +1065,14 @@ namespace switcheo
                 }
                 else
                 {
+                    var inputs = currentTxn.GetInputs();
+                    var references = currentTxn.GetReferences();
+
                     // Clean up reservations
                     Storage.Delete(Context(), WithdrawalAddressKey(inputs[0].PrevHash));
 
                     // Notify clients
-                    EmitWithdrawn(withdrawingAddr, assetID, outputs[0].Value, inputs[0].PrevHash); // FIXME: output value here may be wrong?
+                    EmitWithdrawn(withdrawingAddr, assetID, references[0].Value, inputs[0].PrevHash);
                 }
 
                 return true;
