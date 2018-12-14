@@ -123,7 +123,6 @@ namespace switcheo
         private static readonly byte[] ReasonFillingLessThanOne = { 0x25 }; // Filling less than 1 token when trying to fill
         private static readonly byte[] ReasonNotEnoughBalanceOnFiller = { 0x26 }; // Not enough balance to give (wantAssetID) for what you want to take (offerAssetID)
         private static readonly byte[] ReasonNotEnoughBalanceOnNativeToken = { 0x27 }; // Not enough balance in native tokens to use
-        private static readonly byte[] ReasonFeesMoreThanLimit = { 0x28 }; // Fees exceed 0.5%
 
         private struct Offer
         {
@@ -664,13 +663,6 @@ namespace switcheo
             if (deductFeesSeparately && GetBalance(fillerAddress, takerFeeAssetID) < takerFeeAmount)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnNativeToken);
-                return false;
-            }
-
-            // Check that the amountToTake is not more than 0.5% if not using native fees
-            if (!deductFeesSeparately && ((takerFeeAmount * 1000) / amountToTake > 5))
-            {
-                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonFeesMoreThanLimit);
                 return false;
             }
 
