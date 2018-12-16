@@ -106,12 +106,12 @@ namespace switcheo
 
         // Reason Code for balance changes
         private static readonly byte[] ReasonDeposit = { 0x01 }; // Balance increased due to deposit
-        private static readonly byte[] ReasonMake = { 0x02 }; // Balance reduced due to maker making
-        private static readonly byte[] ReasonTake = { 0x03 }; // Balance reduced due to taker filling maker's offered asset
-        private static readonly byte[] ReasonTakerFee = { 0x04 }; // Balance reduced due to taker fees
+        private static readonly byte[] ReasonMakerGive = { 0x02 }; // Balance reduced due to tokens locked when a maker makes an offer
+        private static readonly byte[] ReasonTakerGive = { 0x03 }; // Balance reduced due to taker filling maker's wanted asset
+        private static readonly byte[] ReasonTakerFeeGive = { 0x04 }; // Balance reduced due to taker fees
         private static readonly byte[] ReasonTakerReceive = { 0x05 }; // Balance increased due to taker receiving his cut in the trade
         private static readonly byte[] ReasonMakerReceive = { 0x06 }; // Balance increased due to maker receiving his cut in the trade
-        private static readonly byte[] ReasonContractTakerFee = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
+        private static readonly byte[] ReasonTakerFeeReceive = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
         private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
         private static readonly byte[] ReasonWithdrawal = { 0x09 }; // Balance reduced due to withdrawal from contract
 
@@ -361,6 +361,18 @@ namespace switcheo
                     if (args.Length != 3) return false;
                     return AnnounceWithdraw((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
+                if (operation == "burnTokens") // (originator, assetID, amountToBurn)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 4) return false;
+                    return BurnTokens((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3]);
+                }
+                if (operation == "sweepDustTokens") // (originator, counterparty, dustAssetIDs, dustAmounts, combinedAssetID, combinedAmount)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 6) return false;
+                    return SweepDustTokens((byte[])args[0], (byte[])args[1], (byte[][])args[2], (BigInteger[])args[3], (byte[])args[4], (BigInteger)args[5]);
+                }
 
                 // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
@@ -590,7 +602,7 @@ namespace switcheo
                 (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
 
             // Reduce available balance for the offered asset and amount
-            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, ReasonMake)) return false;
+            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, ReasonMakerGive)) return false;
 
             // Add the offer to storage
             StoreOffer(offerHash, offer);
@@ -672,7 +684,7 @@ namespace switcheo
             }
 
             // Reduce balance from filler
-            ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTake);
+            ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerGive);
 
             // Move filled asset to the maker balance
             IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
@@ -688,12 +700,12 @@ namespace switcheo
                 if (deductFeesSeparately)
                 {
                     // Reduce fees here separately as it is a different asset type
-                    ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFee);
+                    ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeGive);
                 }
                 if (!burnTokens)
                 {
                     // Only increase fee address balance if not burning
-                    IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonContractTakerFee);
+                    IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
                 } else
                 {
                     // Emit burnt event for easier client tracking
@@ -727,7 +739,7 @@ namespace switcheo
             // Check that transaction is signed by the canceller or trading is frozen
             if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && coordinatorWitnessed))) return false;
 
-            // Move funds to maker address
+            // Move tokens to maker address
             IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
 
             // Remove offer
@@ -758,6 +770,47 @@ namespace switcheo
 
             // Announce cancel intent to coordinator
             EmitCancelAnnounced(offer.MakerAddress, offerHash);
+
+            return true;
+        }
+
+        // Burn tokens directly by reducing the user's contract balance.
+        private static bool BurnTokens(byte[] address, byte[] assetID, BigInteger amount, byte[] reasonCode)
+        {
+            // Check that burn txn is authorized
+            if (!CheckTradeWitnesses(address)) return false;
+
+            // Check that reason code is valid
+            var code = reasonCode.ToBigInteger();
+            if (code < 1 || code > 9) throw new ArgumentOutOfRangeException();
+
+            // Reduce contract balance and emit burn event
+            if (!ReduceBalance(address, assetID, amount, reasonCode)) return false;
+            EmitBurnt(address, assetID, amount);
+
+            return true;
+        }
+
+        // Swaps multiple dust tokens into a single token atomically. This operation has no fees.
+        private static bool SweepDustTokens(byte[] address, byte[] counterparty, byte[][] dustAssetIDs, BigInteger[] dustAmounts, byte[] combinedAssetID, BigInteger combinedAmount)
+        {
+            // Check that swap is authorized by user and the counterparty
+            if (!CheckTradeWitnesses(address)) return false;
+            if (!Runtime.CheckWitness(counterparty)) return false;
+
+            // Ensure parameters are correct
+            if (dustAssetIDs.Length == 0 || dustAssetIDs.Length != dustAmounts.Length) return false;
+
+            // Move dust tokens
+            for (var i = 0; i < dustAssetIDs.Length; i++)
+            {
+                if (!ReduceBalance(address, dustAssetIDs[i], dustAmounts[i], ReasonTakerGive)) throw new Exception("Insufficient or invalid balance!");
+                if (!IncreaseBalance(counterparty, dustAssetIDs[i], dustAmounts[i], ReasonMakerReceive)) throw new Exception("Could not increase balance!");
+            }
+
+            // Move combined token
+            if (!ReduceBalance(counterparty, combinedAssetID, combinedAmount, ReasonMakerGive)) throw new Exception("Insufficient or invalid balance!");
+            if (!IncreaseBalance(address, combinedAssetID, combinedAmount, ReasonTakerReceive)) throw new Exception("Could not increase balance!");
 
             return true;
         }
