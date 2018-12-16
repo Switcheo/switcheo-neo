@@ -312,6 +312,11 @@ namespace switcheo
                     if (args.Length != 3) return false;
                     return DepositFrom((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
+                if (operation == "depositFromNonStandard") // (originator, assetID, amount)
+                {
+                    if (args.Length != 3) return false;
+                    return DepositFromNonStandard((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                }
                 if (operation == "onTokenTransfer") // deposit for MCT contract only (from, to, amount)
                 {
                     if (args.Length != 3) return false;
@@ -858,6 +863,20 @@ namespace switcheo
             return true;
         }
 
+        private static bool DepositFromNonStandard(byte[] originator, byte[] assetID, BigInteger amount)
+        {
+            // Check asset length
+            if (assetID.Length != 20) return false;
+
+            // Update balances first
+            if (!ReceivedNEP5(originator, assetID, amount)) return false;
+
+            // Execute deposit to our contract (ExecutionEngine.ExecutingScriptHash)
+            TransferFromNonStandardNEP5(originator, ExecutionEngine.ExecutingScriptHash, assetID, amount);
+
+            return true;
+        }
+
         // Received NEP-5 tokens
         private static bool ReceivedNEP5(byte[] originator, byte[] assetID, BigInteger amount)
         {
@@ -1202,6 +1221,14 @@ namespace switcheo
         {
             // Transfer token (using pre-approval)
             var args = new object[] { ExecutionEngine.ExecutingScriptHash, from, to, amount };
+            var contract = (NEP5Contract)assetID.ToDelegate();
+            if (!(bool)contract("transferFrom", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
+        }
+
+        private static void TransferFromNonStandardNEP5(byte[] from, byte[] to, byte[] assetID, BigInteger amount)
+        {
+            // Transfer token (using pre-approval for non-standard contracts)
+            var args = new object[] { from, to, amount };
             var contract = (NEP5Contract)assetID.ToDelegate();
             if (!(bool)contract("transferFrom", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
         }
