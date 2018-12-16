@@ -154,6 +154,16 @@ namespace switcheo
             };
         }
 
+        private struct Swap
+        {
+            public byte[] MakerAddress;
+            public byte[] TakerAddress;
+            public byte[] AssetID;
+            public BigInteger Amount;
+            public BigInteger ExpiresAt;
+            public bool CompletedOrCancelled;
+        }
+
         private struct AnnouncementInfo
         {
             public BigInteger TimeStamp;
@@ -373,6 +383,24 @@ namespace switcheo
                     if (args.Length != 6) return false;
                     return SweepDustTokens((byte[])args[0], (byte[])args[1], (byte[][])args[2], (BigInteger[])args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
+                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 6) return false;
+                    return CreateAtomicSwap((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5]);
+                }
+                if (operation == "executeAtomicSwap") // (hashOfSecret, preImage)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 6) return false;
+                    return ExecuteAtomicSwap((byte[])args[0], (byte[])args[1]);
+                }
+                if (operation == "cancelAtomicSwap") // (hashOfSecret)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 6) return false;
+                    return CancelAtomicSwap((byte[])args[0]);
+                }
 
                 // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
@@ -489,6 +517,16 @@ namespace switcheo
             if (offerData.Length == 0) return new Offer();
 
             return (Offer)offerData.Deserialize();
+        }
+
+        private static Swap GetSwap(byte[] swapHash)
+        {
+            if (swapHash.Length != 32) throw new ArgumentOutOfRangeException();
+
+            byte[] offerData = Storage.Get(Context(), SwapKey(swapHash));
+            if (offerData.Length == 0) return new Swap();
+
+            return (Swap)offerData.Deserialize();
         }
 
         private static AnnouncementInfo GetAnnouncedWithdrawal(byte[] withdrawingAddr, byte[] assetID)
@@ -799,7 +837,7 @@ namespace switcheo
         // Swaps multiple dust tokens into a single token atomically. This operation has no fees.
         private static bool SweepDustTokens(byte[] originator, byte[] counterparty, byte[][] dustAssetIDs, BigInteger[] dustAmounts, byte[] combinedAssetID, BigInteger combinedAmount)
         {
-            // Check that swap is authorized by user and the counterparty
+            // Check that swap is signed by both the originator and the counterparty
             if (!CheckTradeWitnesses(originator)) return false;
             if (!Runtime.CheckWitness(counterparty)) return false;
 
@@ -846,6 +884,70 @@ namespace switcheo
             // Save balances
             Storage.Put(Context(), originatorBalanceKey, originatorBalances.Serialize());
             Storage.Put(Context(), counterpartyBalanceKey, counterpartyBalances.Serialize());
+
+            return true;
+        }
+
+        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashOfSecret, BigInteger secondsToExpire)
+        {
+            // Check that parameters are valid
+            if (makerAddress.Length != 20 || takerAddress.Length != 20 || hashOfSecret.Length != 32) return false;
+            if (amount < 1 || secondsToExpire < 60) return false;
+
+            // Check that transaction is signed by maker
+            if (!CheckTradeWitnesses(makerAddress)) return false;
+
+            // Reduce contract balance to lock offer amount
+            if (!ReduceBalance(makerAddress, assetID, amount, ReasonMakerGive)) return false;
+
+            // Store swap data
+            var swap = new Swap {
+                MakerAddress = makerAddress,
+                TakerAddress = takerAddress,
+                AssetID = assetID,
+                Amount = amount,
+                ExpiresAt = Runtime.Time + secondsToExpire,
+                CompletedOrCancelled = false
+            };
+            Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
+
+            return true;
+        }
+
+        private static bool ExecuteAtomicSwap(byte[] hashOfSecret, byte[] preImage)
+        {
+            // Check that swap exists and is not already completed or cancelled
+            var swap = GetSwap(hashOfSecret);
+            if (swap.MakerAddress.Length == 0 || swap.CompletedOrCancelled) return false;
+
+            // Verify pre-image
+            if (Hash256(preImage) != hashOfSecret) return false;
+
+            // Move tokens to the target address
+            IncreaseBalance(swap.TakerAddress, swap.AssetID, swap.Amount, ReasonTakerReceive);
+
+            // Update that swap has been completed
+            swap.CompletedOrCancelled = true;
+            Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
+
+            return true;
+        }
+
+        private static bool CancelAtomicSwap(byte[] hashOfSecret)
+        {
+            // Check that swap exists and is not already completed or cancelled
+            var swap = GetSwap(hashOfSecret);
+            if (swap.MakerAddress.Length == 0 || swap.CompletedOrCancelled) return false;
+
+            // Check that the swap can be cancelled
+            if (Runtime.Time < swap.ExpiresAt) return false;
+
+            // Return tokens to the original maker
+            IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonCancel);
+
+            // Update that swap has been cancelled
+            swap.CompletedOrCancelled = true;
+            Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
 
             return true;
         }
@@ -1342,6 +1444,7 @@ namespace switcheo
 
         // Keys
         private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
+        private static byte[] SwapKey(byte[] swapHash) => "swaps".AsByteArray().Concat(swapHash);
         private static byte[] BalanceKey(byte[] originator) => "balances".AsByteArray().Concat(originator);
         private static byte[] WithdrawalAddressKey(byte[] transactionHash) => "withdrawUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
