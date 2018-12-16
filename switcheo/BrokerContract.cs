@@ -443,11 +443,16 @@ namespace switcheo
             return Storage.Get(Context(), "state");
         }
 
-        private static BigInteger GetBalance(byte[] address, byte[] assetID)
+        private static Map<byte[], BigInteger> GetBalances(byte[] address)
         {
             if (address.Length != 20) throw new ArgumentOutOfRangeException();
+            return (Map<byte[], BigInteger>)Storage.Get(Context(), BalanceKey(address)).Deserialize();
+        }
+
+        private static BigInteger GetBalance(byte[] address, byte[] assetID)
+        {
             if (assetID.Length != 20 && assetID.Length != 32) throw new ArgumentOutOfRangeException();
-            return Storage.Get(Context(), BalanceKey(address, assetID)).AsBigInteger();
+            return GetBalances(address)[assetID];
         }
 
         private static bool GetIsWhitelisted(byte[] assetID, int whitelistEnum)
@@ -792,25 +797,55 @@ namespace switcheo
         }
 
         // Swaps multiple dust tokens into a single token atomically. This operation has no fees.
-        private static bool SweepDustTokens(byte[] address, byte[] counterparty, byte[][] dustAssetIDs, BigInteger[] dustAmounts, byte[] combinedAssetID, BigInteger combinedAmount)
+        private static bool SweepDustTokens(byte[] originator, byte[] counterparty, byte[][] dustAssetIDs, BigInteger[] dustAmounts, byte[] combinedAssetID, BigInteger combinedAmount)
         {
             // Check that swap is authorized by user and the counterparty
-            if (!CheckTradeWitnesses(address)) return false;
+            if (!CheckTradeWitnesses(originator)) return false;
             if (!Runtime.CheckWitness(counterparty)) return false;
 
             // Ensure parameters are correct
+            if (originator.Length != 20 || counterparty.Length != 20) return false;
             if (dustAssetIDs.Length == 0 || dustAssetIDs.Length != dustAmounts.Length) return false;
+
+            // Get balances
+            var originatorBalanceKey = BalanceKey(originator);
+            var counterpartyBalanceKey = BalanceKey(counterparty);
+
+            var originatorBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), originatorBalanceKey).Deserialize();
+            var counterpartyBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), counterpartyBalanceKey).Deserialize();
 
             // Move dust tokens
             for (var i = 0; i < dustAssetIDs.Length; i++)
             {
-                if (!ReduceBalance(address, dustAssetIDs[i], dustAmounts[i], ReasonTakerGive)) throw new Exception("Insufficient or invalid balance!");
-                if (!IncreaseBalance(counterparty, dustAssetIDs[i], dustAmounts[i], ReasonMakerReceive)) throw new Exception("Could not increase balance!");
+                var assetID = dustAssetIDs[i];
+                var amount = dustAmounts[i];
+
+                if (amount < 1) throw new ArgumentOutOfRangeException();
+                if (assetID == combinedAssetID) throw new Exception("Dust token must not be same as combined token!");
+
+                originatorBalances[assetID] -= amount;
+                counterpartyBalances[assetID] += amount;
+
+                if (originatorBalances[assetID] < 0) throw new Exception("Insufficient balance!");
+
+                EmitTransferred(originator, assetID, 0 - amount, ReasonTakerGive);
+                EmitTransferred(counterparty, assetID, amount, ReasonMakerReceive);
             }
 
             // Move combined token
-            if (!ReduceBalance(counterparty, combinedAssetID, combinedAmount, ReasonMakerGive)) throw new Exception("Insufficient or invalid balance!");
-            if (!IncreaseBalance(address, combinedAssetID, combinedAmount, ReasonTakerReceive)) throw new Exception("Could not increase balance!");
+            if (combinedAmount < 1) throw new ArgumentOutOfRangeException();
+
+            counterpartyBalances[combinedAssetID] -= combinedAmount;
+            originatorBalances[combinedAssetID] += combinedAmount;
+
+            if (counterpartyBalances[combinedAssetID] < 0) throw new Exception("Insufficient balance!");
+
+            EmitTransferred(originator, combinedAssetID, 0 - combinedAmount, ReasonMakerGive);
+            EmitTransferred(counterparty, combinedAssetID, combinedAmount, ReasonTakerReceive);
+
+            // Save balances
+            Storage.Put(Context(), originatorBalanceKey, originatorBalances.Serialize());
+            Storage.Put(Context(), counterpartyBalanceKey, counterpartyBalances.Serialize());
 
             return true;
         }
@@ -845,9 +880,12 @@ namespace switcheo
         {
             if (amount < 1) throw new ArgumentOutOfRangeException();
 
-            byte[] key = BalanceKey(originator, assetID);
-            BigInteger currentBalance = Storage.Get(Context(), key).AsBigInteger();
-            Storage.Put(Context(), key, currentBalance + amount);
+            var key = BalanceKey(originator);
+
+            var balances = (Map<byte[], BigInteger>)Storage.Get(Context(), key).Deserialize();
+            balances[assetID] += amount;
+
+            Storage.Put(Context(), key, balances.Serialize());
             EmitTransferred(originator, assetID, amount, reason);
 
             return true;
@@ -857,14 +895,14 @@ namespace switcheo
         {
             if (amount < 1) throw new ArgumentOutOfRangeException();
 
-            var key = BalanceKey(address, assetID);
-            var currentBalance = Storage.Get(Context(), key).AsBigInteger();
-            var newBalance = currentBalance - amount;
+            var key = BalanceKey(address);
 
-            if (newBalance < 0) return false;
+            var balances = (Map<byte[], BigInteger>)Storage.Get(Context(), key).Deserialize();
+            balances[assetID] -= amount;
 
-            if (newBalance > 0) Storage.Put(Context(), key, newBalance);
-            else Storage.Delete(Context(), key);
+            if (balances[assetID] < 0) return false;
+
+            Storage.Put(Context(), key, balances.Serialize());
             EmitTransferred(address, assetID, 0 - amount, reason);
 
             return true;
@@ -1304,7 +1342,7 @@ namespace switcheo
 
         // Keys
         private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
-        private static byte[] BalanceKey(byte[] originator, byte[] assetID) => "balance".AsByteArray().Concat(originator).Concat(assetID);
+        private static byte[] BalanceKey(byte[] originator) => "balances".AsByteArray().Concat(originator);
         private static byte[] WithdrawalAddressKey(byte[] transactionHash) => "withdrawUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
         private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
