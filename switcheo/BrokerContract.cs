@@ -896,6 +896,10 @@ namespace switcheo
 
             // Check that transaction is signed by maker
             if (!CheckTradeWitnesses(makerAddress)) return false;
+            
+            // Check that there is no existing swap of the same hash
+            var prevSwap = GetSwap(hashOfSecret);
+            if (prevSwap.MakerAddress.Length != 0) return false;
 
             // Reduce contract balance to lock offer amount
             if (!ReduceBalance(makerAddress, assetID, amount, ReasonMakerGive)) return false;
