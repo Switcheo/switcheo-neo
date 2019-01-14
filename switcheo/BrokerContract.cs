@@ -79,6 +79,11 @@ namespace switcheo
         private static readonly byte[] Owner = "AZThHNqfUGV9TTPsz2i7VT69iUwfySXGW9".ToScriptHash();
         private static readonly ulong maxAnnounceDelay = 60 * 60 * 24 * 7; // 7 days
 
+        // Transaction Types
+        private static readonly byte ClaimTransactionType = 0x02;
+        private static readonly byte ContractTransactionType = 0x80;
+        private static readonly byte InvocationTransactionType = 0xd1;
+
         // Contract States
         private static readonly byte[] Pending = { };         // only can initialize
         private static readonly byte[] Active = { 0x01 };     // all operations active
@@ -88,7 +93,6 @@ namespace switcheo
         private static readonly byte[] Mark = { 0x50 };
         private static readonly byte[] Withdraw = { 0x51 };
         private static readonly byte[] OpCode_TailCall = { 0x69 };
-        private static readonly byte Type_InvocationTransaction = 0xd1;
         private static readonly byte TAUsage_WithdrawalStage = 0xa1;
         private static readonly byte TAUsage_NEP5AssetID = 0xa2;
         private static readonly byte TAUsage_SystemAssetID = 0xa3;
@@ -197,21 +201,49 @@ namespace switcheo
                 var outputs = currentTxn.GetOutputs();
                 var references = currentTxn.GetReferences();
 
+                // Handle UTXO consolidations
+                if (currentTxn.Type == ContractTransactionType)
+                {
+                    // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
+                    if (!IsAllInputsUnreserved(inputs)) return false;
+
+                    // Check that no assets are transferred out from contract
+                    if (!IsFullTransferToSelf(references, outputs, GasAssetID)) return false;
+                    if (!IsFullTransferToSelf(references, outputs, NeoAssetID)) return false;
+
+                    // Check that consolidation is signed off by coordinator to prevent DOS
+                    if (!Runtime.CheckWitness(GetCoordinatorAddress())) return false;
+
+                    return true;
+                }
+
+                // Handle GAS claims
+                if (currentTxn.Type == ClaimTransactionType)
+                {
+                    // Ensure nothing is sent out from this contract
+                    foreach (var i in references)
+                    {
+                        if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
+                    }
+                    // Only allow claims to be sent to fee address for manual dispersal
+                    if (outputs.Length > 1 || outputs[0].ScriptHash != GetFeeAddress()) return false;
+                    return true;
+                }
+
+                // Must be an InvocationTransaction if not a Contract or Claim
+                if (currentTxn.Type != InvocationTransactionType) return false;
+
                 // Check that Application trigger will be tail called with the correct params
-                if (currentTxn.Type != Type_InvocationTransaction) return false;
                 if (((InvocationTransaction)currentTxn).Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
 
                 if (withdrawalStage == Mark)
                 {
                     // Check that this is a valid SystemAsset withdrawal
                     ulong amount = (ulong)outputs[0].Value;
-                    if (amount == 0 || isWithdrawingNEP5) return false;
+                    if (amount == 0 || outputs.Length > 2 || isWithdrawingNEP5) return false;
 
                     // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
-                    foreach (var i in inputs)
-                    {
-                        if (i.PrevIndex == 0 && Storage.Get(Context(), WithdrawalAddressKey(i.PrevHash)).Length > 0) return false;
-                    }
+                    if (!IsAllInputsUnreserved(inputs)) return false;
 
                     // Check that nothing is burnt from the contract
                     ulong totalIn = 0;
@@ -233,7 +265,7 @@ namespace switcheo
                     // Check that the withdrawing address has sufficient contract balance
                     if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount)) return false;
 
-                    // Check that the transaction is signed by the withdraw coordinator
+                    // Check that the transaction is signed by the withdraw coordinator, or...
                     if (!Runtime.CheckWitness(GetWithdrawCoordinatorAddress()))
                     {
                         // If not signed by withdraw coordinator it must be pre-announced + signed by the user
@@ -1347,6 +1379,23 @@ namespace switcheo
         private static StorageContext Context() => Storage.CurrentContext;
         private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
+
+        private static bool IsAllInputsUnreserved(TransactionInput[] inputs)
+        {
+            foreach (var i in inputs)
+            {
+                if (i.PrevIndex == 0 && Storage.Get(Context(), WithdrawalAddressKey(i.PrevHash)).Length > 0) return false;
+            }
+
+            return true;
+        }
+
+        private static bool IsFullTransferToSelf(TransactionOutput[] inputs, TransactionOutput[] outputs, byte[] assetID)
+        {
+            ulong totalIn = SumOutputAmounts(inputs, ExecutionEngine.ExecutingScriptHash, assetID);
+            ulong totalOut = SumOutputAmounts(outputs, ExecutionEngine.ExecutingScriptHash, assetID);
+            return totalIn == totalOut;
+        }
 
         private static bool IsWithdrawalAnnounced(byte[] withdrawingAddr, byte[] assetID, BigInteger amount)
         {
