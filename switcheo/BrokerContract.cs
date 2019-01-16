@@ -72,6 +72,15 @@ namespace switcheo
         [DisplayName("announceDelaySet")]
         public static event Action<BigInteger> EmitAnnounceDelaySet; // (delay)
 
+        [DisplayName("swapCreated")]
+        public static event Action<byte[], byte[], byte[], BigInteger, byte[], BigInteger, byte[], BigInteger> EmitSwapCreated; // (makerAddress, takerAddress, assetID, amount, hashedSecret, expiryTime, feeAssetID, feeAmount)
+
+        [DisplayName("swapExecuted")]
+        public static event Action<byte[]> EmitSwapExecuted; // (hashedSecret)
+
+        [DisplayName("swapCancelled")]
+        public static event Action<byte[], BigInteger> EmitSwapCancelled; // (hashedSecret, cancelFeeAmount)
+
         [DisplayName("initialized")]
         public static event Action Initialized;
 
@@ -108,14 +117,18 @@ namespace switcheo
         // private static readonly byte[] MctAssetID = { 161, 47, 30, 104, 24, 178, 176, 62, 14, 249, 6, 237, 39, 46, 18, 9, 144, 116, 169, 38 };
         private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
 
-        // Reason Code for balance changes
+        //* Reason Code for balance changes *//
+        // Deposits
         private static readonly byte[] ReasonDeposit = { 0x01 }; // Balance increased due to deposit
+        // Making an offer
         private static readonly byte[] ReasonMakerGive = { 0x02 }; // Balance reduced due to tokens locked when a maker makes an offer
+        private static readonly byte[] ReasonMakerFeeGive = { 0x10 }; // Balance reduced due to maker fees
         private static readonly byte[] ReasonTakerGive = { 0x03 }; // Balance reduced due to taker filling maker's wanted asset
         private static readonly byte[] ReasonTakerFeeGive = { 0x04 }; // Balance reduced due to taker fees
         private static readonly byte[] ReasonTakerReceive = { 0x05 }; // Balance increased due to taker receiving his cut in the trade
         private static readonly byte[] ReasonMakerReceive = { 0x06 }; // Balance increased due to maker receiving his cut in the trade
         private static readonly byte[] ReasonTakerFeeReceive = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
+        private static readonly byte[] ReasonMakerFeeReceive = { 0x0B }; // Balance increased on fee address due to contract receiving maker fee
         private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
         private static readonly byte[] ReasonWithdrawal = { 0x09 }; // Balance reduced due to withdrawal from contract
 
@@ -165,7 +178,9 @@ namespace switcheo
             public byte[] AssetID;
             public BigInteger Amount;
             public BigInteger ExpiresAt;
-            public bool CompletedOrCancelled;
+            public byte[] FeeAssetID;
+            public BigInteger FeeAmount;
+            public bool active;
         }
 
         private struct AnnouncementInfo
@@ -418,20 +433,20 @@ namespace switcheo
                 if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 6) return false;
-                    return CreateAtomicSwap((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5]);
+                    if (args.Length != 8) return false;
+                    return CreateAtomicSwap((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5], (byte[])args[6], (BigInteger)args[7]);
                 }
                 if (operation == "executeAtomicSwap") // (hashOfSecret, preImage)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 6) return false;
+                    if (args.Length != 2) return false;
                     return ExecuteAtomicSwap((byte[])args[0], (byte[])args[1]);
                 }
                 if (operation == "cancelAtomicSwap") // (hashOfSecret)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 6) return false;
-                    return CancelAtomicSwap((byte[])args[0]);
+                    if (args.Length != 2) return false;
+                    return CancelAtomicSwap((byte[])args[0], (BigInteger)args[1]);
                 }
 
                 // == Owner ==
@@ -920,70 +935,123 @@ namespace switcheo
             return true;
         }
 
-        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashOfSecret, BigInteger secondsToExpire)
+        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger secondsToExpire, byte[] feeAssetID, BigInteger feeAmount)
         {
             // Check that parameters are valid
-            if (makerAddress.Length != 20 || takerAddress.Length != 20 || hashOfSecret.Length != 32) return false;
-            if (amount < 1 || secondsToExpire < 60) return false;
+            if (makerAddress.Length != 20 || takerAddress.Length != 20 || hashedSecret.Length != 32) return false;
+            if (amount < 1 || feeAmount < 0 || secondsToExpire < 60) return false;
 
             // Check that transaction is signed by maker
             if (!CheckTradeWitnesses(makerAddress)) return false;
             
             // Check that there is no existing swap of the same hash
-            var prevSwap = GetSwap(hashOfSecret);
+            var prevSwap = GetSwap(hashedSecret);
             if (prevSwap.MakerAddress.Length != 0) return false;
 
-            // Reduce contract balance to lock offer amount
+            // Get balances and check whether enough balances to be reduced
+            var balances = GetBalances(makerAddress);
+            if (balances[assetID] - amount < 0) {
+                throw new Exception("Not enough balance");
+            }
+            var deductFeesSeparately = feeAssetID != assetID;
+            if (deductFeesSeparately) {
+                if (balances[feeAssetID] - feeAmount < 0) {
+                    throw new Exception("Not enough fee balances");
+                }
+            } else { // will deduct fees from locked asset
+                if (feeAmount > amount) {
+                    throw new Exception("Fee amount more than locking amount");
+                }
+            }
+
+            // Reduce contract balance from maker to lock amount
             if (!ReduceBalance(makerAddress, assetID, amount, ReasonMakerGive)) return false;
 
+            // If fees are of a different asset, reduce fees from maker balance
+            if (feeAmount > 0 && deductFeesSeparately)
+            {
+                ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonTakerFeeGive);
+            }
+
+            var expiryTime = Runtime.Time + secondsToExpire;
             // Store swap data
             var swap = new Swap {
                 MakerAddress = makerAddress,
                 TakerAddress = takerAddress,
                 AssetID = assetID,
                 Amount = amount,
-                ExpiresAt = Runtime.Time + secondsToExpire,
-                CompletedOrCancelled = false
+                ExpiresAt = expiryTime,
+                FeeAssetID = feeAssetID,
+                FeeAmount = feeAmount,
+                active = true
             };
-            Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
+            Storage.Put(Context(), SwapKey(hashedSecret), swap.Serialize());
+            EmitSwapCreated(makerAddress, takerAddress, assetID, amount, hashedSecret, expiryTime, feeAssetID, feeAmount);
 
             return true;
         }
 
-        private static bool ExecuteAtomicSwap(byte[] hashOfSecret, byte[] preImage)
+        private static bool ExecuteAtomicSwap(byte[] hashedSecret, byte[] preImage)
         {
             // Check that swap exists and is not already completed or cancelled
-            var swap = GetSwap(hashOfSecret);
-            if (swap.MakerAddress.Length == 0 || swap.CompletedOrCancelled) return false;
+            var swap = GetSwap(hashedSecret);
+            if (swap.MakerAddress.Length == 0 || !swap.active) return false;
 
             // Verify pre-image
-            if (Hash256(preImage) != hashOfSecret) return false;
+            if (Sha256(preImage) != hashedSecret) return false;
+
+            // Get balances
+            var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
+            var swapAmountAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
 
             // Move tokens to the target address
-            IncreaseBalance(swap.TakerAddress, swap.AssetID, swap.Amount, ReasonTakerReceive);
+            IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonTakerReceive);
+
+            // Send fees to fee address
+            var feeAdress = GetFeeAddress();
+            IncreaseBalance(feeAdress, swap.FeeAssetID, swap.FeeAmount, ReasonTakerReceive);
 
             // Update that swap has been completed
-            swap.CompletedOrCancelled = true;
-            Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
-
+            swap.active = false;
+            Storage.Put(Context(), SwapKey(hashedSecret), swap.Serialize());
+            EmitSwapExecuted(hashedSecret);
             return true;
         }
 
-        private static bool CancelAtomicSwap(byte[] hashOfSecret)
+        private static bool CancelAtomicSwap(byte[] hashOfSecret, BigInteger cancelFeeAmount)
         {
-            // Check that swap exists and is not already completed or cancelled
+            // Prevent double cancel. Check that swap exists and is not already completed or cancelled
             var swap = GetSwap(hashOfSecret);
-            if (swap.MakerAddress.Length == 0 || swap.CompletedOrCancelled) return false;
+            if (swap.MakerAddress.Length == 0 || !swap.active) return false;
 
             // Check that the swap can be cancelled
             if (Runtime.Time < swap.ExpiresAt) return false;
 
+            // Check that there is enough fees that was locked to deduct
+            if (swap.FeeAmount < cancelFeeAmount) return false;
+
+            // Check that feeDeductionAmount is not < 0
+            if (cancelFeeAmount != null && cancelFeeAmount < 0) return false;
+
+            var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
+
             // Return tokens to the original maker
-            IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonCancel);
+            if (deductFeesSeparately) {
+                // Return full amount locked
+                IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonCancel);
+                // Return full fee amount - cancelFeeAmount 
+                IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount, ReasonCancel);
+            } else {
+                // Reduce fee from swap amount
+                var amountToRefundAfterFees = swap.Amount - cancelFeeAmount;
+                // Refund remaining swap amount
+                IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonCancel);
+            }
 
             // Update that swap has been cancelled
-            swap.CompletedOrCancelled = true;
+            swap.active = false;
             Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
+            EmitSwapCancelled(hashOfSecret, cancelFeeAmount);
 
             return true;
         }
