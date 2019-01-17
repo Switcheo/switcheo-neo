@@ -954,7 +954,7 @@ namespace switcheo
         {
             // Check that parameters are valid
             if (makerAddress.Length != 20 || takerAddress.Length != 20 || hashedSecret.Length != 32) return false;
-            if (amount < 1 || feeAmount < 0) return false;
+            if (amount < 1 || feeAmount < 0 || expiryTime < Runtime.Time ) return false;
 
             // Check that transaction is signed by maker
             if (!CheckTradeWitnesses(makerAddress)) return false;
