@@ -950,11 +950,11 @@ namespace switcheo
             return true;
         }
 
-        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger secondsToExpire, byte[] feeAssetID, BigInteger feeAmount)
+        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger expiryTime, byte[] feeAssetID, BigInteger feeAmount)
         {
             // Check that parameters are valid
             if (makerAddress.Length != 20 || takerAddress.Length != 20 || hashedSecret.Length != 32) return false;
-            if (amount < 1 || feeAmount < 0 || secondsToExpire < 60) return false;
+            if (amount < 1 || feeAmount < 0) return false;
 
             // Check that transaction is signed by maker
             if (!CheckTradeWitnesses(makerAddress)) return false;
@@ -988,7 +988,6 @@ namespace switcheo
                 ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonSwapMakerFeeGive);
             }
 
-            var expiryTime = Runtime.Time + secondsToExpire;
             // Store swap data
             var swap = new Swap {
                 MakerAddress = makerAddress,
