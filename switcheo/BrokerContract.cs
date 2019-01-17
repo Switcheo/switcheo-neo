@@ -128,7 +128,7 @@ namespace switcheo
         private static readonly byte[] ReasonTakerReceive = { 0x05 }; // Balance increased due to taker receiving his cut in the trade
         private static readonly byte[] ReasonMakerReceive = { 0x06 }; // Balance increased due to maker receiving his cut in the trade
         private static readonly byte[] ReasonTakerFeeReceive = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
-        private static readonly byte[] ReasonMakerFeeReceive = { 0x0B }; // Balance increased on fee address due to contract receiving maker fee
+        private static readonly byte[] ReasonMakerFeeReceive = { 0x11 }; // Balance increased on fee address due to contract receiving maker fee
         private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
         private static readonly byte[] ReasonWithdrawal = { 0x09 }; // Balance reduced due to withdrawal from contract
 
@@ -140,6 +140,21 @@ namespace switcheo
         private static readonly byte[] ReasonFillingLessThanOne = { 0x25 }; // Filling less than 1 token when trying to fill
         private static readonly byte[] ReasonNotEnoughBalanceOnFiller = { 0x26 }; // Not enough balance to give (wantAssetID) for what you want to take (offerAssetID)
         private static readonly byte[] ReasonNotEnoughBalanceOnNativeToken = { 0x27 }; // Not enough balance in native tokens to use
+
+        // Atomic Swaps Balance Change Reason Codes
+
+        // Creating a swap
+        private static readonly byte[] ReasonSwapMakerGive = { 0x30 };
+        private static readonly byte[] ReasonSwapMakerFeeGive = { 0x32 };
+
+        // Executing a swap
+        private static readonly byte[] ReasonSwapTakerReceive = { 0x35 };
+        private static readonly byte[] ReasonSwapFeeReceive = { 0x37 };
+
+        // Cancelling a swap
+        private static readonly byte[] ReasonSwapCancelMakerReceive = { 0x38 };
+        private static readonly byte[] ReasonSwapCancelFeeReceive = { 0x3B };
+        private static readonly byte[] ReasonSwapCancelFeeRefundReceive = { 0x3D };
 
         private struct Offer
         {
@@ -965,12 +980,12 @@ namespace switcheo
             }
 
             // Reduce contract balance from maker to lock amount
-            if (!ReduceBalance(makerAddress, assetID, amount, ReasonMakerGive)) return false;
+            if (!ReduceBalance(makerAddress, assetID, amount, ReasonSwapMakerGive)) return false;
 
             // If fees are of a different asset, reduce fees from maker balance
             if (feeAmount > 0 && deductFeesSeparately)
             {
-                ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonTakerFeeGive);
+                ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonSwapMakerFeeGive);
             }
 
             var expiryTime = Runtime.Time + secondsToExpire;
@@ -1005,11 +1020,11 @@ namespace switcheo
             var swapAmountAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
 
             // Move tokens to the target address
-            IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonTakerReceive);
+            IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonSwapTakerReceive);
 
             // Send fees to fee address
             var feeAdress = GetFeeAddress();
-            IncreaseBalance(feeAdress, swap.FeeAssetID, swap.FeeAmount, ReasonTakerReceive);
+            IncreaseBalance(feeAdress, swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
 
             // Update that swap has been completed
             swap.active = false;
@@ -1038,14 +1053,21 @@ namespace switcheo
             // Return tokens to the original maker
             if (deductFeesSeparately) {
                 // Return full amount locked
-                IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonCancel);
-                // Return full fee amount - cancelFeeAmount 
-                IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount, ReasonCancel);
+                IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonSwapCancelMakerReceive);
+                // Return full fee amount - cancelFeeAmount
+                if (swap.FeeAmount - cancelFeeAmount > 0) {
+                    IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount - cancelFeeAmount, ReasonSwapCancelFeeRefundReceive);
+                }
             } else {
-                // Reduce fee from swap amount
+                // Deduct fee from swap amount
                 var amountToRefundAfterFees = swap.Amount - cancelFeeAmount;
                 // Refund remaining swap amount
-                IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonCancel);
+                IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonSwapCancelMakerReceive);
+            }
+
+            // Send cancel fees to fee address
+            if (cancelFeeAmount > 0) {
+                IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, cancelFeeAmount, ReasonSwapCancelFeeReceive);
             }
 
             // Update that swap has been cancelled
