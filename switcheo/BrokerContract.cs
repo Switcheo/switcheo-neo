@@ -1033,7 +1033,7 @@ namespace switcheo
             return true;
         }
 
-        private static bool CancelAtomicSwap(byte[] hashOfSecret, BigInteger cancelFeeAmount)
+        private static bool CancelAtomicSwap(byte[] hashOfSecret, BigInteger _cancelFeeAmount)
         {
             // Prevent double cancel. Check that swap exists and is not already completed or cancelled
             var swap = GetSwap(hashOfSecret);
@@ -1043,12 +1043,18 @@ namespace switcheo
             if (Runtime.Time < swap.ExpiresAt) return false;
 
             // Check that there is enough fees that was locked to deduct
-            if (swap.FeeAmount < cancelFeeAmount) return false;
+            if (swap.FeeAmount < _cancelFeeAmount) return false;
 
-            // Check that feeDeductionAmount is not < 0
-            if (cancelFeeAmount != null && cancelFeeAmount < 0) return false;
+            // Check that cancelFeeAmount is not < 0
+            if (_cancelFeeAmount != null && _cancelFeeAmount < 0) return false;
 
             var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
+
+            // Deduct full fees if not sent by coordinator
+            var cancelFeeAmount = _cancelFeeAmount;
+            if (!Runtime.CheckWitness(GetCoordinatorAddress())) {
+                cancelFeeAmount = swap.FeeAmount;
+            }
 
             // Return tokens to the original maker
             if (deductFeesSeparately) {
