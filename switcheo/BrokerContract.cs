@@ -397,12 +397,12 @@ namespace switcheo
                     if (!ReceivedNEP5((byte[])args[0], MctAssetID, (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
                     return true;
                 }
-                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce)
+                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce, makerFeeAssetID, makerFeeAmount)
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 6) return false;
+                    if (args.Length != 8) return false;
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5]);
-                    return MakeOffer(offer);
+                    return MakeOffer(offer, (byte[])args[6], (BigInteger)args[7], (bool)args[8]);
                 }
                 if (operation == "fillOffer") // fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount)
                 {
@@ -687,7 +687,7 @@ namespace switcheo
          * Trading *
          ***********/
 
-        private static bool MakeOffer(Offer offer)
+        private static bool MakeOffer(Offer offer, byte[] makerFeeAssetID, BigInteger makerFeeAmount, bool burnTokens)
         {
             // Check that transaction is signed by the maker and coordinator
             if (!CheckTradeWitnesses(offer.MakerAddress)) return false;
@@ -706,11 +706,42 @@ namespace switcheo
             if ((offer.OfferAssetID.Length != 20 && offer.OfferAssetID.Length != 32) ||
                 (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
 
+            // Check fees
+            if (makerFeeAssetID.Length != 20 && makerFeeAssetID.Length != 32) return false;
+            if (makerFeeAmount < 0) return false;
+
+            // Check that there are enough assets to be deducted for fees
+            if (GetBalance(offer.MakerAddress, makerFeeAssetID) < makerFeeAmount) return false;
+
+            // Check if we should deduct fees separately from the taker amount
+            bool deductFeesSeparately = makerFeeAssetID != offer.OfferAssetID;
+
+            var totalAmount = deductFeesSeparately ? offer.OfferAmount : offer.OfferAmount + makerFeeAmount;
+
             // Reduce available balance for the offered asset and amount
-            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, ReasonMakerGive)) return false;
+            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, totalAmount, ReasonMakerGive)) return false;
 
             // Add the offer to storage
             StoreOffer(offerHash, offer);
+
+            // Move fees
+            if (makerFeeAmount > 0)
+            {
+                if (deductFeesSeparately)
+                {
+                    // Reduce fees here separately as it is a different asset type
+                    ReduceBalance(offer.MakerAddress, makerFeeAssetID, makerFeeAmount, ReasonMakerFeeGive);
+                }
+                if (!burnTokens)
+                {
+                    // Only increase fee address balance if not burning
+                    IncreaseBalance(GetFeeAddress(), makerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
+                } else
+                {
+                    // Emit burnt event for easier client tracking
+                    EmitBurnt(offer.MakerAddress, makerFeeAssetID, makerFeeAmount);
+                }
+            }
 
             // Notify clients
             EmitCreated(offer.MakerAddress, offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
@@ -799,7 +830,6 @@ namespace switcheo
             IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
             // Move fees
-            byte[] feeAddress = Storage.Get(Context(), "feeAddress");
             if (takerFeeAmount > 0)
             {
                 if (deductFeesSeparately)
@@ -810,7 +840,7 @@ namespace switcheo
                 if (!burnTokens)
                 {
                     // Only increase fee address balance if not burning
-                    IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
+                    IncreaseBalance(GetFeeAddress(), takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
                 } else
                 {
                     // Emit burnt event for easier client tracking
