@@ -41,6 +41,10 @@ namespace switcheo
 
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger, byte[]> EmitWithdrawn; // (address, assetID, amount, utxoUsed)
+        // Emitted when a user approved a spender not of this contract
+        public static event Action<byte[], byte[]> EmitSpenderApproved; // (user, spender)
+        // Emitted when a user rescinds approval for a spender not of this contract
+        public static event Action<byte[], byte[]> EmitSpenderRescind; // (user, spender)
 
         [DisplayName("burnt")]
         public static event Action<byte[], byte[], BigInteger> EmitBurnt; // (address, assetID, amount)
@@ -519,6 +523,16 @@ namespace switcheo
                     if (args.Length != 1) return false;
                     return SealWhitelist((int)args[0]);
                 }
+                if (operation == "addSpender")
+                {
+                    if (args.Length != 1) return false;
+                    return AddSpender((byte[])args[0]);
+                }
+                if (operation == "removeSpender")
+                {
+                    if (args.Length != 1) return false;
+                    return RemoveSpender((byte[])args[0]);
+                }
             }
 
             return true;
@@ -682,6 +696,112 @@ namespace switcheo
             EmitWhitelistSealed(whitelistEnum);
             return true;
         }
+
+        /// @notice Adds an address to the set of allowed spenders.
+        /// @dev Spenders are meant to be additional EVM contracts that
+        /// will allow adding or upgrading of trading functionality, without
+        /// having to cancel all offers and withdraw all tokens for all users.
+        /// This whitelist ensures that all approved spenders are contracts
+        /// that have been verified by the owner. Note that each user also
+        /// has to invoke `approveSpender` to actually allow the `spender`
+        /// to spend his/her balance, so that they can examine / verify
+        /// the new spender contract first.
+        /// @param spender The address to add as a whitelisted spender
+        private static bool AddSpender(byte[] spender)
+        {
+            if (!IsAddressValid(spender)) return false;
+            Storage.Put(Context(), WhitelistedSpenderKey(spender), Active);
+            return true;
+        }
+
+        /// @notice Removes an address from the set of allowed spenders.
+        /// @dev Note that removing a spender from the whitelist will not
+        /// prevent already approved spenders from spending a user's balance.
+        /// This is to ensure that the spender contracts can be certain that once
+        /// an approval is done, the owner cannot rescient spending priviledges,
+        /// and cause tokens to be withheld or locked in the spender contract.
+        /// Users must instead manually rescind approvals using `rescindApproval`
+        /// after the `spender` has been removed from the whitelist.
+        /// @param spender The address to remove as a whitelisted spender
+        private static bool RemoveSpender(byte[] spender)
+        {
+            if (!IsAddressValid(spender)) return false;
+            Storage.Delete(Context(), WhitelistedSpenderKey(spender));
+            return true;
+        }
+
+        /***********
+         * Spending contract balance from other contract/address *
+         ***********/
+
+        /// @notice Approve an address for spending any amount of
+        /// any token from the `msg.sender`'s balances
+        /// @dev Analogous to ERC-20 `approve`, with the following differences:
+        ///     - `_spender` must be whitelisted by owner
+        ///     - approval can be rescinded at a later time by the user
+        ///       iff it has been removed from the whitelist
+        ///     - spending amount is unlimited
+        /// @param _spender The address to approve spending
+        private static bool ApproveSpender(byte[] address, byte[] spender)
+        {
+            if (!IsAddressValid(spender)) return false;
+            if (!Runtime.CheckWitness(address)) return false;
+            // Check spender is approved
+            var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
+            if (!(isWhitelisted.Length > 0 && isWhitelisted == Active)) return false;
+            Storage.Put(Context(), ApproveSpenderKey(address, spender), Active);
+            EmitSpenderApproved(address, spender);
+            return true;
+        }
+
+        /// @notice Rescinds a previous approval for spending the `msg.sender`'s contract balance.
+        /// @dev Rescinds approval for a spender, after it has been removed from
+        /// the `whitelistedSpenders` set. This allows an approval to be removed
+        /// if both the owner and user agrees that the previously approved spender
+        /// contract should no longer be used.
+        /// @param _spender The address to rescind spending approval
+        private static bool RescindApproval(byte[] address, byte[] spender)
+        {
+            if (!IsAddressValid(spender)) return false;
+            if (!Runtime.CheckWitness(address)) return false;
+            // Check spender must be removed from the whitelist
+            var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
+            if (isWhitelisted.Length > 0 && isWhitelisted == Active) return false;
+
+            Storage.Delete(Context(), ApproveSpenderKey(address, spender));
+            EmitSpenderRescind(address, spender);
+            return true;
+        }
+
+        /// @notice Transfers tokens from one address to another
+        /// @dev Analogous to ERC-20 `transferFrom`, with the following differences:
+        ///     - the address of the token to transfer must be specified
+        ///     - any amount of token can be transferred, as long as it is less or equal
+        ///       to `_from`'s balance
+        ///     - reason codes can be attached and they must not use reasons specified in
+        ///       this contract
+        /// @param from The address to transfer tokens from
+        /// @param to The address to transfer tokens to
+        /// @param amount The number of tokens to transfer
+        /// @param asset The address of the token to transfer
+        /// @param decreaseReason A reason code to emit in the `BalanceDecrease` event
+        /// @param increaseReason A reason code to emit in the `BalanceIncrease` event
+        private static bool SpendFrom(byte[] from, byte[] to, BigInteger amount, byte[] assetID, byte[] decreaseReason, byte[] increaseReason)
+        {
+            if (!IsReasonCodeUnused(decreaseReason)) return false;
+            if (!IsReasonCodeUnused(increaseReason)) return false;
+            if (!IsAddressValid(from) || !IsAddressValid(to)) return false;
+            if (!Runtime.CheckWitness(from)) return false;
+            // Check spender is approved
+            var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(ExecutionEngine.CallingScriptHash));
+            if (!(isWhitelisted.Length > 0 && isWhitelisted == Active)) return false;
+
+            ReduceBalance(from, assetID, amount, decreaseReason);
+            IncreaseBalance(to, assetID, amount, increaseReason);
+            return true;
+        }
+
+        
 
         /***********
          * Trading *
@@ -1618,6 +1738,16 @@ namespace switcheo
             throw new ArgumentOutOfRangeException();
         }
 
+        private static bool IsAddressValid(byte[] scriptHash)
+        {
+            return scriptHash.Length == 20;
+        }
+
+        private static bool IsReasonCodeUnused(byte[] reasonCode)
+        {
+            return !(reasonCode.Length <= 1 && reasonCode[0] <= 0x3D);
+        }
+
         private static byte[] Hash(Offer o) => Hash256(o.Nonce);
 
         // Keys
@@ -1630,5 +1760,7 @@ namespace switcheo
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
         private static byte[] CancelAnnounceKey(byte[] offerHash) => "cancelAnnounce".AsByteArray().Concat(offerHash);
         private static byte[] WithdrawAnnounceKey(byte[] originator, byte[] assetID) => "withdrawAnnounce".AsByteArray().Concat(originator).Concat(assetID);
+        private static byte[] WhitelistedSpenderKey(byte[] spender) => "whitelistedSpenders".AsByteArray().Concat(spender);
+        private static byte[] ApproveSpenderKey(byte[] originator, byte[] spender) => "approveSpenders".AsByteArray().Concat(originator).Concat(spender);
     }
 }
