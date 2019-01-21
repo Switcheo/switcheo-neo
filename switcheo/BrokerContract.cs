@@ -231,7 +231,7 @@ namespace switcheo
                 var withdrawalStage = GetWithdrawalStage(currentTxn);
                 var withdrawingAddr = GetWithdrawalAddress(currentTxn);
                 var assetID = GetWithdrawalAsset(currentTxn);
-                var isWithdrawingNEP5 = assetID.Length == 20;
+                var isWithdrawingNEP5 = IsToken(assetID);
                 var inputs = currentTxn.GetInputs();
                 var outputs = currentTxn.GetOutputs();
                 var references = currentTxn.GetReferences();
@@ -550,19 +550,19 @@ namespace switcheo
 
         private static Map<byte[], BigInteger> GetBalances(byte[] address)
         {
-            if (address.Length != 20) throw new ArgumentOutOfRangeException();
+            if (!IsAddressValid(address)) throw new ArgumentOutOfRangeException();
             return (Map<byte[], BigInteger>)Storage.Get(Context(), BalanceKey(address)).Deserialize();
         }
 
         private static BigInteger GetBalance(byte[] address, byte[] assetID)
         {
-            if (assetID.Length != 20 && assetID.Length != 32) throw new ArgumentOutOfRangeException();
+            if (!IsAssetLengthValid(assetID)) throw new ArgumentOutOfRangeException();
             return GetBalances(address)[assetID];
         }
 
         private static bool GetIsWhitelisted(byte[] assetID, int whitelistEnum)
         {
-            if (assetID.Length != 20) throw new ArgumentOutOfRangeException();
+            if (!IsToken(assetID)) throw new ArgumentOutOfRangeException();
             return Storage.Get(Context(), GetWhitelistKey(assetID, whitelistEnum)).Length > 0;
         }
 
@@ -641,7 +641,7 @@ namespace switcheo
 
         private static bool SetFeeAddress(byte[] feeAddress)
         {
-            if (feeAddress.Length != 20) return false;
+            if (!IsAddressValid(feeAddress)) return false;
             Storage.Put(Context(), "feeAddress", feeAddress);
             EmitFeeAddressSet(feeAddress);
             return true;
@@ -649,7 +649,7 @@ namespace switcheo
 
         private static bool SetCoordinatorAddress(byte[] coordinatorAddress)
         {
-            if (coordinatorAddress.Length != 20) return false;
+            if (!IsAddressValid(coordinatorAddress)) return false;
             Storage.Put(Context(), "coordinatorAddress", coordinatorAddress);
             EmitCoordinatorSet(coordinatorAddress);
             return true;
@@ -657,7 +657,7 @@ namespace switcheo
 
         private static bool SetWithdrawCoordinatorAddress(byte[] withdrawCoordinatorAddress)
         {
-            if (withdrawCoordinatorAddress.Length != 20) return false;
+            if (!IsAddressValid(withdrawCoordinatorAddress)) return false;
             Storage.Put(Context(), "withdrawCoordinatorAddress", withdrawCoordinatorAddress);
             EmitWithdrawCoordinatorSet(withdrawCoordinatorAddress);
             return true;
@@ -673,7 +673,7 @@ namespace switcheo
 
         private static bool AddToWhitelist(byte[] scriptHash, int whitelistEnum)
         {
-            if (scriptHash.Length != 20) return false;
+            if (!IsToken(scriptHash)) return false;
             if (IsWhitelistSealed(whitelistEnum)) return false;
             var key = GetWhitelistKey(scriptHash, whitelistEnum);
             Storage.Put(Context(), key, Active);
@@ -683,7 +683,7 @@ namespace switcheo
 
         private static bool RemoveFromWhitelist(byte[] scriptHash, int whitelistEnum)
         {
-            if (scriptHash.Length != 20) return false;
+            if (!IsToken(scriptHash)) return false;
             if (IsWhitelistSealed(whitelistEnum)) return false;
             var key = GetWhitelistKey(scriptHash, whitelistEnum);
             Storage.Delete(Context(), key);
@@ -789,8 +789,8 @@ namespace switcheo
         /// @param increaseReason A reason code to emit in the `BalanceIncrease` event
         private static bool SpendFrom(byte[] from, byte[] to, BigInteger amount, byte[] assetID, byte[] decreaseReason, byte[] increaseReason)
         {
-            if (!IsReasonCodeUnused(decreaseReason)) return false;
-            if (!IsReasonCodeUnused(increaseReason)) return false;
+            if (!IsValidUnusedReasonCode(decreaseReason)) return false;
+            if (!IsValidUnusedReasonCode(increaseReason)) return false;
             if (!IsAddressValid(from) || !IsAddressValid(to)) return false;
             if (!Runtime.CheckWitness(from)) return false;
             // Check spender is approved
@@ -824,11 +824,10 @@ namespace switcheo
             if (offer.OfferAssetID == offer.WantAssetID) return false;
 
             // Check that asset IDs are valid
-            if ((offer.OfferAssetID.Length != 20 && offer.OfferAssetID.Length != 32) ||
-                (offer.WantAssetID.Length != 20 && offer.WantAssetID.Length != 32)) return false;
+            if ((!IsAssetLengthValid(offer.OfferAssetID)) || (!IsAssetLengthValid(offer.WantAssetID))) return false;
 
             // Check fees
-            if (makerFeeAssetID.Length != 20 && makerFeeAssetID.Length != 32) return false;
+            if (!IsAssetLengthValid(makerFeeAssetID)) return false;
             if (makerFeeAmount < 0) return false;
 
             // Check that there are enough assets to be deducted for fees
@@ -880,7 +879,7 @@ namespace switcheo
             if (!CheckTradeWitnesses(fillerAddress)) return false;
 
             // Check fees
-            if (takerFeeAssetID.Length != 20 && takerFeeAssetID.Length != 32) return false;
+            if (!IsAssetLengthValid(takerFeeAssetID)) return false;
             if (takerFeeAmount < 0) return false;
 
             // Check that the offer still exists
@@ -1067,7 +1066,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(counterparty)) return false;
 
             // Ensure parameters are correct
-            if (originator.Length != 20 || counterparty.Length != 20) return false;
+            if (!IsAddressValid(originator) || !IsAddressValid(counterparty) || !IsAssetLengthValid(combinedAssetID)) return false;
             if (dustAssetIDs.Length == 0 || dustAssetIDs.Length != dustAmounts.Length) return false;
 
             // Get balances
@@ -1084,6 +1083,7 @@ namespace switcheo
                 var amount = dustAmounts[i];
 
                 if (amount < 1) throw new ArgumentOutOfRangeException();
+                if (!IsAssetLengthValid(assetID)) throw new Exception("Must be a system asset or a token!");
                 if (assetID == combinedAssetID) throw new Exception("Dust token must not be same as combined token!");
 
                 originatorBalances[assetID] -= amount;
@@ -1116,7 +1116,7 @@ namespace switcheo
         private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger expiryTime, byte[] feeAssetID, BigInteger feeAmount)
         {
             // Check that parameters are valid
-            if (makerAddress.Length != 20 || takerAddress.Length != 20 || hashedSecret.Length != 32) return false;
+            if (!IsAddressValid(makerAddress) || !IsAddressValid(takerAddress) || hashedSecret.Length != 32 || !IsAssetLengthValid(assetID)) return false;
             if (amount < 1 || feeAmount < 0 || expiryTime < Runtime.Time ) return false;
 
             // Check that transaction is signed by maker
@@ -1311,7 +1311,7 @@ namespace switcheo
         private static bool Deposit(byte[] originator, byte[] assetID, BigInteger amount)
         {
             // Check asset lengths
-            if (assetID.Length == 32)
+            if (IsSystemAsset(assetID))
             {
                 // Accept all system assets
                 var received = Received();
@@ -1321,7 +1321,7 @@ namespace switcheo
                 Storage.Put(Context(), DepositKey(currentTxn), 1);
                 return received;
             }
-            else if (assetID.Length == 20)
+            else if (IsToken(assetID))
             {
                 // Update balances first
                 if (!ReceivedNEP5(originator, assetID, amount)) return false;
@@ -1339,7 +1339,7 @@ namespace switcheo
         private static bool DepositFrom(byte[] originator, byte[] assetID, BigInteger amount)
         {
             // Check asset length
-            if (assetID.Length != 20) return false;
+            if (!IsToken(assetID)) return false;
 
             // Update balances first
             if (!ReceivedNEP5(originator, assetID, amount)) return false;
@@ -1353,7 +1353,7 @@ namespace switcheo
         private static bool DepositFromNonStandard(byte[] originator, byte[] assetID, BigInteger amount)
         {
             // Check asset length
-            if (assetID.Length != 20) return false;
+            if (!IsToken(assetID)) return false;
 
             // Update balances first
             if (!ReceivedNEP5(originator, assetID, amount)) return false;
@@ -1372,7 +1372,7 @@ namespace switcheo
             if (GetState() != Active) return false;
 
             // Check address and amounts
-            if (originator.Length != 20) return false;
+            if (IsAddressValid(originator)) return false;
             if (amount < 1) return false;
 
             // Update balances first
@@ -1478,7 +1478,7 @@ namespace switcheo
             var withdrawalStage = GetWithdrawalStage(currentTxn);
             var withdrawingAddr = GetWithdrawalAddress(currentTxn); // Not validated, anyone can help anyone do step 2 of withdrawal
             var assetID = GetWithdrawalAsset(currentTxn);
-            var isWithdrawingNEP5 = assetID.Length == 20;
+            var isWithdrawingNEP5 = IsToken(assetID);
 
             if (withdrawalStage == Mark)
             {
@@ -1676,14 +1676,14 @@ namespace switcheo
 
         private static bool IsWhitelistedOldNEP5(byte[] assetID)
         {
-            if (assetID.Length != 20) return false;
+            if (!IsToken(assetID)) return false;
             if (assetID.AsBigInteger() == 0) return false;
             return Storage.Get(Context(), OldWhitelistKey(assetID)).Length > 0;
         }
 
         private static bool IsWhitelistedNewNEP5(byte[] assetID)
         {
-            if (assetID.Length != 20) return false;
+            if (!IsToken(assetID)) return false;
             if (assetID.AsBigInteger() == 0) return false;
             return Storage.Get(Context(), NewWhitelistKey(assetID)).Length > 0;
         }
@@ -1751,14 +1751,28 @@ namespace switcheo
             throw new ArgumentOutOfRangeException();
         }
 
+        private static bool IsToken(byte[] scriptHash)
+        {
+            return scriptHash.Length == 20;
+        }
+
+        private static bool IsSystemAsset(byte[] scriptHash)
+        {
+            return scriptHash.Length == 32;
+        }
+        private static bool IsAssetLengthValid(byte[] scriptHash)
+        {
+            return IsToken(scriptHash) || IsSystemAsset(scriptHash);
+        }
+
         private static bool IsAddressValid(byte[] scriptHash)
         {
             return scriptHash.Length == 20;
         }
 
-        private static bool IsReasonCodeUnused(byte[] reasonCode)
+        private static bool IsValidUnusedReasonCode(byte[] reasonCode)
         {
-            return !(reasonCode.Length <= 1 && reasonCode[0] <= 0x3D);
+            return reasonCode.Length == 1 && !(reasonCode[0] <= 0x3D);
         }
 
         private static byte[] Hash(Offer o) => Hash256(o.Nonce);
