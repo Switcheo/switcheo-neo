@@ -136,6 +136,10 @@ namespace switcheo
         private static readonly byte[] ReasonMakerFeeReceive = { 0x11 }; // Balance increased on fee address due to contract receiving maker fee
         private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
         private static readonly byte[] ReasonWithdrawal = { 0x09 }; // Balance reduced due to withdrawal from contract
+        private static readonly byte[] ReasonSweeperGive = { 0x16 }; // Balance reduced due to sweeper sweeping dust token from contract balance
+        private static readonly byte[] ReasonSweepCounterpartyReceive = { 0x17 }; // Balance increased due to counterparty receiving token from sweeper
+        private static readonly byte[] ReasonSweepCounterpartyGive = { 0x18 }; // Balance reduced due to counterparty giving token to sweeper
+        private static readonly byte[] ReasonSweeperReceive = { 0x19 }; // Balance increased due to sweeper receiving token from counterparty
 
         // Reason Code for fill failures
         private static readonly byte[] ReasonOfferNotExist = { 0x21 }; // Empty Offer when trying to fill
@@ -1091,8 +1095,8 @@ namespace switcheo
 
                 if (originatorBalances[assetID] < 0) throw new Exception("Insufficient balance!");
 
-                EmitTransferred(originator, assetID, 0 - amount, ReasonTakerGive);
-                EmitTransferred(counterparty, assetID, amount, ReasonMakerReceive);
+                EmitTransferred(originator, assetID, 0 - amount, ReasonSweeperGive);
+                EmitTransferred(counterparty, assetID, amount, ReasonSweepCounterpartyReceive);
             }
 
             // Move combined token
@@ -1103,8 +1107,8 @@ namespace switcheo
 
             if (counterpartyBalances[combinedAssetID] < 0) throw new Exception("Insufficient balance!");
 
-            EmitTransferred(originator, combinedAssetID, 0 - combinedAmount, ReasonMakerGive);
-            EmitTransferred(counterparty, combinedAssetID, combinedAmount, ReasonTakerReceive);
+            EmitTransferred(counterparty, combinedAssetID, 0 - combinedAmount, ReasonSweepCounterpartyGive);
+            EmitTransferred(originator, combinedAssetID, combinedAmount, ReasonSweeperReceive);
 
             // Save balances
             Storage.Put(Context(), originatorBalanceKey, originatorBalances.Serialize());
