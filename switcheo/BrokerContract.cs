@@ -4,6 +4,7 @@ using Neo.SmartContract.Framework.Services.System;
 using System;
 using System.ComponentModel;
 using System.Numerics;
+using System.Collections.Generic;
 
 namespace switcheo
 {
@@ -921,9 +922,13 @@ namespace switcheo
                 return false;
             }
 
+            // Get all balances needed
+            var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), fillerAddress).Deserialize();
+            var makerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), offer.MakerAddress).Deserialize();
+
             // Check that there is enough balance to reduce for filler
-            var fillerBalance = GetBalance(fillerAddress, offer.WantAssetID);
-            if (fillerBalance < amountToFill)
+            var fillerOfferAssetBalance = fillerBalances[offer.WantAssetID];
+            if (fillerOfferAssetBalance < amountToFill)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnFiller);
                 return false;
@@ -940,14 +945,17 @@ namespace switcheo
             }
 
             // Reduce balance from filler
-            ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerGive);
+            fillerBalances[offer.WantAssetID] -= amountToFill;
+            EmitTransferred(fillerAddress, offer.WantAssetID, 0 - amountToFill, ReasonTakerGive);
 
             // Move filled asset to the maker balance
-            IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
+            makerBalances[offer.WantAssetID] += amountToFill;
+            EmitTransferred(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
 
             // Move taken asset to the taker balance
             var amountToTakeAfterFees = deductFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
-            IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
+            fillerBalances[offer.OfferAssetID] += amountToTakeAfterFees;
+            EmitTransferred(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
             // Move fees
             if (takerFeeAmount > 0)
@@ -955,7 +963,8 @@ namespace switcheo
                 if (deductFeesSeparately)
                 {
                     // Reduce fees here separately as it is a different asset type
-                    ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeGive);
+                    fillerBalances[takerFeeAssetID] -= takerFeeAmount;
+                    EmitTransferred(fillerAddress, takerFeeAssetID, 0 - takerFeeAmount, ReasonTakerFeeGive);
                 }
                 if (!burnTokens)
                 {
@@ -967,6 +976,10 @@ namespace switcheo
                     EmitBurnt(fillerAddress, takerFeeAssetID, takerFeeAmount);
                 }
             }
+
+            // Save balances
+            Storage.Put(Context(), fillerAddress, fillerBalances.Serialize());
+            Storage.Put(Context(), offer.MakerAddress, makerBalances.Serialize());
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToTake;
