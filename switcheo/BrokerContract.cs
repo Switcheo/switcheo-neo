@@ -116,6 +116,7 @@ namespace switcheo
         // Byte Constants
         private static readonly byte[] Empty = { };
         private static readonly byte[] Zero = { 0x00 };
+        private static readonly byte[] Zeroes = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // 32 bytes of zeroes
         private static readonly byte[] NeoAssetID = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
         private static readonly byte[] MctAssetID = { 63, 188, 96, 124, 18, 194, 135, 54, 52, 50, 36, 164, 180, 216, 245, 19, 165, 194, 124, 168 };
@@ -1779,7 +1780,22 @@ namespace switcheo
             return reasonCode.Length == 1 && !(reasonCode[0] <= 0x3D);
         }
 
-        private static byte[] Hash(Offer o) => Hash256(o.Nonce);
+        private static byte[] Hash(Offer o)
+        {
+            var offerAmountBytes = o.OfferAmount.AsByteArray();
+            var wantAmountBytes = o.WantAmount.AsByteArray();
+
+            if (offerAmountBytes.Length > 32 || wantAmountBytes.Length > 32) throw new ArgumentOutOfRangeException();
+
+            var bytes = o.MakerAddress
+                .Concat(o.OfferAssetID)
+                .Concat(o.WantAssetID)
+                .Concat(offerAmountBytes.Concat(Zeroes).Take(32))
+                .Concat(wantAmountBytes.Concat(Zeroes).Take(32))
+                .Concat(o.Nonce);
+
+            return Hash256(bytes);
+        }
 
         // Keys
         private static byte[] OfferKey(byte[] offerHash) => "offers".AsByteArray().Concat(offerHash);
