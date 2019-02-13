@@ -407,10 +407,10 @@ namespace switcheo
                     if (!ReceivedNEP5((byte[])args[0], MctAssetID, (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
                     return true;
                 }
-                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce, makerFeeAssetID, makerFeeAmount)
+                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce, makerFeeAssetID, makerFeeAmount, burnTokens)
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 8) return false;
+                    if (args.Length != 9) return false;
                     var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5]);
                     return MakeOffer(offer, (byte[])args[6], (BigInteger)args[7], (bool)args[8]);
                 }
@@ -562,7 +562,15 @@ namespace switcheo
         private static BigInteger GetBalance(byte[] address, byte[] assetID)
         {
             if (!IsAssetLengthValid(assetID)) throw new ArgumentOutOfRangeException();
-            return GetBalances(address)[assetID];
+            Map<byte[], BigInteger> balances = GetBalances(address);
+            if (balances.HasKey(assetID))
+            {
+                return GetBalances(address)[assetID];
+            }
+            else
+            {
+                return 0;
+            }
         }
 
         private static bool GetIsWhitelisted(byte[] assetID, int whitelistEnum)
@@ -807,7 +815,7 @@ namespace switcheo
             return true;
         }
 
-        
+
 
         /***********
          * Trading *
@@ -861,7 +869,8 @@ namespace switcheo
                 {
                     // Only increase fee address balance if not burning
                     IncreaseBalance(GetFeeAddress(), makerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
-                } else
+                }
+                else
                 {
                     // Emit burnt event for easier client tracking
                     EmitBurnt(offer.MakerAddress, makerFeeAssetID, makerFeeAmount);
@@ -927,10 +936,18 @@ namespace switcheo
             }
 
             // Get all balances needed
-            var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), fillerAddress).Deserialize();
-            var makerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), offer.MakerAddress).Deserialize();
+            var fillerBalanceKey = BalanceKey(fillerAddress);
+            var makerBalanceKey = BalanceKey(offer.MakerAddress);
+            var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), fillerBalanceKey).Deserialize();
+            var makerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), makerBalanceKey).Deserialize();
 
             // Check that there is enough balance to reduce for filler
+            if (!fillerBalances.HasKey(offer.WantAssetID))
+            {
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnFiller);
+                return false;
+            }
+
             var fillerOfferAssetBalance = fillerBalances[offer.WantAssetID];
             if (fillerOfferAssetBalance < amountToFill)
             {
@@ -953,11 +970,13 @@ namespace switcheo
             EmitTransferred(fillerAddress, offer.WantAssetID, 0 - amountToFill, ReasonTakerGive);
 
             // Move filled asset to the maker balance
+            if (!makerBalances.HasKey(offer.WantAssetID)) makerBalances[offer.WantAssetID] = 0;
             makerBalances[offer.WantAssetID] += amountToFill;
             EmitTransferred(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
 
             // Move taken asset to the taker balance
             var amountToTakeAfterFees = deductFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
+            if (!fillerBalances.HasKey(offer.OfferAssetID)) fillerBalances[offer.OfferAssetID] = 0;
             fillerBalances[offer.OfferAssetID] += amountToTakeAfterFees;
             EmitTransferred(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
@@ -974,7 +993,8 @@ namespace switcheo
                 {
                     // Only increase fee address balance if not burning
                     IncreaseBalance(GetFeeAddress(), takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
-                } else
+                }
+                else
                 {
                     // Emit burnt event for easier client tracking
                     EmitBurnt(fillerAddress, takerFeeAssetID, takerFeeAmount);
@@ -982,8 +1002,8 @@ namespace switcheo
             }
 
             // Save balances
-            Storage.Put(Context(), fillerAddress, fillerBalances.Serialize());
-            Storage.Put(Context(), offer.MakerAddress, makerBalances.Serialize());
+            Storage.Put(Context(), fillerBalanceKey, fillerBalances.Serialize());
+            Storage.Put(Context(), makerBalanceKey, makerBalances.Serialize());
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToTake;
@@ -1122,27 +1142,33 @@ namespace switcheo
         {
             // Check that parameters are valid
             if (!IsAddressValid(makerAddress) || !IsAddressValid(takerAddress) || hashedSecret.Length != 32 || !IsAssetLengthValid(assetID)) return false;
-            if (amount < 1 || feeAmount < 0 || expiryTime < Runtime.Time ) return false;
+            if (amount < 1 || feeAmount < 0 || expiryTime < Runtime.Time) return false;
 
             // Check that transaction is signed by maker
             if (!CheckTradeWitnesses(makerAddress)) return false;
-            
+
             // Check that there is no existing swap of the same hash
             var prevSwap = GetSwap(hashedSecret);
             if (prevSwap.MakerAddress.Length != 0) return false;
 
             // Get balances and check whether enough balances to be reduced
             var balances = GetBalances(makerAddress);
-            if (balances[assetID] - amount < 0) {
+            if (balances[assetID] - amount < 0)
+            {
                 throw new Exception("Not enough balance");
             }
             var deductFeesSeparately = feeAssetID != assetID;
-            if (deductFeesSeparately) {
-                if (balances[feeAssetID] - feeAmount < 0) {
+            if (deductFeesSeparately)
+            {
+                if (balances[feeAssetID] - feeAmount < 0)
+                {
                     throw new Exception("Not enough fee balances");
                 }
-            } else { // will deduct fees from locked asset
-                if (feeAmount > amount) {
+            }
+            else
+            { // will deduct fees from locked asset
+                if (feeAmount > amount)
+                {
                     throw new Exception("Fee amount more than locking amount");
                 }
             }
@@ -1157,7 +1183,8 @@ namespace switcheo
             }
 
             // Store swap data
-            var swap = new Swap {
+            var swap = new Swap
+            {
                 MakerAddress = makerAddress,
                 TakerAddress = takerAddress,
                 AssetID = assetID,
@@ -1219,19 +1246,24 @@ namespace switcheo
 
             // Deduct full fees if not sent by coordinator
             var cancelFeeAmount = _cancelFeeAmount;
-            if (!Runtime.CheckWitness(GetCoordinatorAddress())) {
+            if (!Runtime.CheckWitness(GetCoordinatorAddress()))
+            {
                 cancelFeeAmount = swap.FeeAmount;
             }
 
             // Return tokens to the original maker
-            if (deductFeesSeparately) {
+            if (deductFeesSeparately)
+            {
                 // Return full amount locked
                 IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonSwapCancelMakerReceive);
                 // Return full fee amount - cancelFeeAmount
-                if (swap.FeeAmount - cancelFeeAmount > 0) {
+                if (swap.FeeAmount - cancelFeeAmount > 0)
+                {
                     IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount - cancelFeeAmount, ReasonSwapCancelFeeRefundReceive);
                 }
-            } else {
+            }
+            else
+            {
                 // Deduct fee from swap amount
                 var amountToRefundAfterFees = swap.Amount - cancelFeeAmount;
                 // Refund remaining swap amount
@@ -1239,7 +1271,8 @@ namespace switcheo
             }
 
             // Send cancel fees to fee address
-            if (cancelFeeAmount > 0) {
+            if (cancelFeeAmount > 0)
+            {
                 IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, cancelFeeAmount, ReasonSwapCancelFeeReceive);
             }
 
@@ -1282,10 +1315,19 @@ namespace switcheo
             if (amount < 1) throw new ArgumentOutOfRangeException();
 
             var key = BalanceKey(originator);
-
-            var balances = (Map<byte[], BigInteger>)Storage.Get(Context(), key).Deserialize();
-            balances[assetID] += amount;
-
+            var serializedBalances = Storage.Get(Context(), key);
+            Map<byte[], BigInteger> balances;
+            // Check if there is an existing record of user
+            if (serializedBalances.Length > 1)
+            {
+                balances = (Map<byte[], BigInteger>)serializedBalances.Deserialize();
+            }
+            else // Else create it
+            {
+                balances = new Map<byte[], BigInteger>();
+            }
+            // Check if assetID has been saved in map then add to it, else save new amount to it
+            balances[assetID] = balances.HasKey(assetID) ? balances[assetID] + amount : amount;
             Storage.Put(Context(), key, balances.Serialize());
             EmitTransferred(originator, assetID, amount, reason);
 
@@ -1297,11 +1339,17 @@ namespace switcheo
             if (amount < 1) throw new ArgumentOutOfRangeException();
 
             var key = BalanceKey(address);
-
             var balances = (Map<byte[], BigInteger>)Storage.Get(Context(), key).Deserialize();
-            balances[assetID] -= amount;
 
-            if (balances[assetID] < 0) return false;
+            if (balances.HasKey(assetID))
+            {
+                balances[assetID] -= amount;
+                if (balances[assetID] < 0) return false;
+            }
+            else
+            {
+                throw new Exception("No existing balance to reduce");
+            }
 
             Storage.Put(Context(), key, balances.Serialize());
             EmitTransferred(address, assetID, 0 - amount, reason);
@@ -1320,7 +1368,6 @@ namespace switcheo
             {
                 // Accept all system assets
                 var received = Received();
-
                 // Mark deposit
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
                 Storage.Put(Context(), DepositKey(currentTxn), 1);
@@ -1375,11 +1422,9 @@ namespace switcheo
             // Verify that deposit is authorized
             if (!CheckTradeWitnesses(originator)) return false;
             if (GetState() != Active) return false;
-
             // Check address and amounts
-            if (IsAddressValid(originator)) return false;
+            if (!IsAddressValid(originator)) return false;
             if (amount < 1) return false;
-
             // Update balances first
             IncreaseBalance(originator, assetID, amount, ReasonDeposit);
             EmitDeposited(originator, assetID, amount);
@@ -1538,6 +1583,17 @@ namespace switcheo
                     // Check withdrawal validity
                     var amount = GetWithdrawalAmount(currentTxn);
                     if (amount <= 0) return false;
+
+                    // Check that the withdrawing address has sufficient contract balance
+                    if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount)) return false;
+
+                    // Check that the transaction is signed by the withdraw coordinator, or...
+                    if (!Runtime.CheckWitness(GetWithdrawCoordinatorAddress()))
+                    {
+                        // If not signed by withdraw coordinator it must be pre-announced + signed by the user
+                        if (!Runtime.CheckWitness(withdrawingAddr)) return false;
+                        if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                    }
 
                     // Check old whitelist
                     if (IsWhitelistedOldNEP5(assetID))
