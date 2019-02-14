@@ -4,7 +4,6 @@ using Neo.SmartContract.Framework.Services.System;
 using System;
 using System.ComponentModel;
 using System.Numerics;
-using System.Collections.Generic;
 
 namespace switcheo
 {
@@ -175,6 +174,44 @@ namespace switcheo
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
             public byte[] Nonce;
+        }
+
+        private static Map<byte[], BalanceChange[]> NewBalanceChanges()
+        {
+            return new Map<byte[], BalanceChange[]>();
+        }
+
+        private static void ExecuteBalanceChanges(Map<byte[], BalanceChange[]> balanceChanges)
+        {
+            // Loop each address that needs to be updated
+            foreach(byte[] address in balanceChanges.Keys)
+            {
+                // Get current blockchain state
+                var key = BalanceKey(address);
+                var serializedBalances = Storage.Get(Context(), key);
+                Map<byte[], BigInteger> balances;
+                if (serializedBalances.Length > 1)
+                {
+                    balances = (Map<byte[], BigInteger>)serializedBalances.Deserialize();
+                }
+                else // Else create it
+                {
+                    balances = new Map<byte[], BigInteger>();
+                }
+
+                BalanceChange[] addressBalanceChanges = balanceChanges[address];
+                foreach(BalanceChange change in addressBalanceChanges)
+                {
+                    // Init empty balance if none is found
+                    if (!balances.HasKey(change.AssetID)) balances[change.AssetID] = 0;
+                    // Add positive or negative balance
+                    balances[change.AssetID] += change.Amount;
+                    if (balances[change.AssetID] < 0) throw new Exception("Balance went to negative!");
+                    EmitTransferred(address, change.AssetID, change.Amount, change.ReasonCode);
+                }
+                // Save to blockchain after all changes are updated for this address
+                Storage.Put(Context(), key, balances.Serialize());
+            }
         }
 
         private static Offer NewOffer(
@@ -810,8 +847,10 @@ namespace switcheo
             var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(ExecutionEngine.CallingScriptHash));
             if (!(isWhitelisted.Length > 0 && isWhitelisted == Active)) return false;
 
-            ReduceBalance(from, assetID, amount, decreaseReason);
-            IncreaseBalance(to, assetID, amount, increaseReason);
+            var balanceChanges = NewBalanceChanges();
+            balanceChanges.ReduceBalance(from, assetID, amount, decreaseReason);
+            balanceChanges.IncreaseBalance(to, assetID, amount, increaseReason);
+            ExecuteBalanceChanges(balanceChanges);
             return true;
         }
 
@@ -851,8 +890,9 @@ namespace switcheo
 
             var totalAmount = deductFeesSeparately ? offer.OfferAmount : offer.OfferAmount + makerFeeAmount;
 
+            var balanceChanges = NewBalanceChanges();
             // Reduce available balance for the offered asset and amount
-            if (!ReduceBalance(offer.MakerAddress, offer.OfferAssetID, totalAmount, ReasonMakerGive)) return false;
+            balanceChanges.ReduceBalance(offer.MakerAddress, offer.OfferAssetID, totalAmount, ReasonMakerGive);
 
             // Add the offer to storage
             StoreOffer(offerHash, offer);
@@ -863,12 +903,12 @@ namespace switcheo
                 if (deductFeesSeparately)
                 {
                     // Reduce fees here separately as it is a different asset type
-                    ReduceBalance(offer.MakerAddress, makerFeeAssetID, makerFeeAmount, ReasonMakerFeeGive);
+                    balanceChanges.ReduceBalance(offer.MakerAddress, makerFeeAssetID, makerFeeAmount, ReasonMakerFeeGive);
                 }
                 if (!burnTokens)
                 {
                     // Only increase fee address balance if not burning
-                    IncreaseBalance(GetFeeAddress(), makerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
+                    balanceChanges.IncreaseBalance(GetFeeAddress(), makerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
                 }
                 else
                 {
@@ -876,6 +916,8 @@ namespace switcheo
                     EmitBurnt(offer.MakerAddress, makerFeeAssetID, makerFeeAmount);
                 }
             }
+
+            ExecuteBalanceChanges(balanceChanges);
 
             // Notify clients
             EmitCreated(offer.MakerAddress, offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
@@ -936,6 +978,7 @@ namespace switcheo
             }
 
             // Get all balances needed
+            
             var fillerBalanceKey = BalanceKey(fillerAddress);
             var makerBalanceKey = BalanceKey(offer.MakerAddress);
             var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), fillerBalanceKey).Deserialize();
@@ -959,26 +1002,22 @@ namespace switcheo
             bool deductFeesSeparately = takerFeeAssetID != offer.OfferAssetID;
 
             // Check that there is enough balance in native fees if using native fees
-            if (deductFeesSeparately && GetBalance(fillerAddress, takerFeeAssetID) < takerFeeAmount)
+            if (deductFeesSeparately && takerFeeAmount > 0 && fillerBalances.HasKey(takerFeeAssetID) && fillerBalances[takerFeeAssetID] < takerFeeAmount)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnNativeToken);
                 return false;
             }
 
+            var balanceChanges = NewBalanceChanges();
             // Reduce balance from filler
-            fillerBalances[offer.WantAssetID] -= amountToFill;
-            EmitTransferred(fillerAddress, offer.WantAssetID, 0 - amountToFill, ReasonTakerGive);
+            balanceChanges.ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFeeGive);
 
             // Move filled asset to the maker balance
-            if (!makerBalances.HasKey(offer.WantAssetID)) makerBalances[offer.WantAssetID] = 0;
-            makerBalances[offer.WantAssetID] += amountToFill;
-            EmitTransferred(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
+            balanceChanges.IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
 
             // Move taken asset to the taker balance
             var amountToTakeAfterFees = deductFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
-            if (!fillerBalances.HasKey(offer.OfferAssetID)) fillerBalances[offer.OfferAssetID] = 0;
-            fillerBalances[offer.OfferAssetID] += amountToTakeAfterFees;
-            EmitTransferred(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
+            balanceChanges.IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
             // Move fees
             if (takerFeeAmount > 0)
@@ -992,7 +1031,7 @@ namespace switcheo
                 if (!burnTokens)
                 {
                     // Only increase fee address balance if not burning
-                    IncreaseBalance(GetFeeAddress(), takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
+                    balanceChanges.IncreaseBalance(GetFeeAddress(), takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
                 }
                 else
                 {
@@ -1002,8 +1041,7 @@ namespace switcheo
             }
 
             // Save balances
-            Storage.Put(Context(), fillerBalanceKey, fillerBalances.Serialize());
-            Storage.Put(Context(), makerBalanceKey, makerBalances.Serialize());
+            ExecuteBalanceChanges(balanceChanges);
 
             // Update available amount
             offer.AvailableAmount = offer.AvailableAmount - amountToTake;
@@ -1032,7 +1070,9 @@ namespace switcheo
             if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && coordinatorWitnessed))) return false;
 
             // Move tokens to maker address
-            IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
+            var balanceChanges = NewBalanceChanges();
+            balanceChanges.IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
+            ExecuteBalanceChanges(balanceChanges);
 
             // Remove offer
             RemoveOffer(offerHash);
@@ -1077,7 +1117,9 @@ namespace switcheo
             if (code < 1 || code > 9) throw new ArgumentOutOfRangeException();
 
             // Reduce contract balance and emit burn event
-            if (!ReduceBalance(address, assetID, amount, reasonCode)) return false;
+            var balanceChanges = NewBalanceChanges();
+            balanceChanges.ReduceBalance(address, assetID, amount, reasonCode);
+            ExecuteBalanceChanges(balanceChanges);
             EmitBurnt(address, assetID, amount);
 
             return true;
@@ -1094,12 +1136,7 @@ namespace switcheo
             if (!IsAddressValid(originator) || !IsAddressValid(counterparty) || !IsAssetLengthValid(combinedAssetID)) return false;
             if (dustAssetIDs.Length == 0 || dustAssetIDs.Length != dustAmounts.Length) return false;
 
-            // Get balances
-            var originatorBalanceKey = BalanceKey(originator);
-            var counterpartyBalanceKey = BalanceKey(counterparty);
-
-            var originatorBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), originatorBalanceKey).Deserialize();
-            var counterpartyBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), counterpartyBalanceKey).Deserialize();
+            var balanceChanges = NewBalanceChanges();
 
             // Move dust tokens
             for (var i = 0; i < dustAssetIDs.Length; i++)
@@ -1111,29 +1148,18 @@ namespace switcheo
                 if (!IsAssetLengthValid(assetID)) throw new Exception("Must be a system asset or a token!");
                 if (assetID == combinedAssetID) throw new Exception("Dust token must not be same as combined token!");
 
-                originatorBalances[assetID] -= amount;
-                counterpartyBalances[assetID] += amount;
-
-                if (originatorBalances[assetID] < 0) throw new Exception("Insufficient balance!");
-
-                EmitTransferred(originator, assetID, 0 - amount, ReasonSweeperGive);
-                EmitTransferred(counterparty, assetID, amount, ReasonSweepCounterpartyReceive);
+                balanceChanges.ReduceBalance(originator, assetID, amount, ReasonSweeperGive);
+                balanceChanges.IncreaseBalance(counterparty, assetID, amount, ReasonSweepCounterpartyReceive);
             }
 
             // Move combined token
             if (combinedAmount < 1) throw new ArgumentOutOfRangeException();
 
-            counterpartyBalances[combinedAssetID] -= combinedAmount;
-            originatorBalances[combinedAssetID] += combinedAmount;
-
-            if (counterpartyBalances[combinedAssetID] < 0) throw new Exception("Insufficient balance!");
-
-            EmitTransferred(counterparty, combinedAssetID, 0 - combinedAmount, ReasonSweepCounterpartyGive);
-            EmitTransferred(originator, combinedAssetID, combinedAmount, ReasonSweeperReceive);
+            balanceChanges.ReduceBalance(counterparty, combinedAssetID, combinedAmount, ReasonSweepCounterpartyGive);
+            balanceChanges.IncreaseBalance(originator, combinedAssetID, combinedAmount, ReasonSweeperReceive);
 
             // Save balances
-            Storage.Put(Context(), originatorBalanceKey, originatorBalances.Serialize());
-            Storage.Put(Context(), counterpartyBalanceKey, counterpartyBalances.Serialize());
+            ExecuteBalanceChanges(balanceChanges);
 
             return true;
         }
@@ -1150,36 +1176,24 @@ namespace switcheo
             // Check that there is no existing swap of the same hash
             var prevSwap = GetSwap(hashedSecret);
             if (prevSwap.MakerAddress.Length != 0) return false;
-
-            // Get balances and check whether enough balances to be reduced
-            var balances = GetBalances(makerAddress);
-            if (balances[assetID] - amount < 0)
-            {
-                throw new Exception("Not enough balance");
-            }
+            
             var deductFeesSeparately = feeAssetID != assetID;
-            if (deductFeesSeparately)
+            
+            // will deduct fees from locked asset
+            if (!deductFeesSeparately && feeAmount > amount)
             {
-                if (balances[feeAssetID] - feeAmount < 0)
-                {
-                    throw new Exception("Not enough fee balances");
-                }
+                throw new Exception("Fee amount more than locking amount");
             }
-            else
-            { // will deduct fees from locked asset
-                if (feeAmount > amount)
-                {
-                    throw new Exception("Fee amount more than locking amount");
-                }
-            }
+
+            var balanceChanges = NewBalanceChanges();
 
             // Reduce contract balance from maker to lock amount
-            if (!ReduceBalance(makerAddress, assetID, amount, ReasonSwapMakerGive)) return false;
+            balanceChanges.ReduceBalance(makerAddress, assetID, amount, ReasonSwapMakerGive);
 
             // If fees are of a different asset, reduce fees from maker balance
             if (feeAmount > 0 && deductFeesSeparately)
             {
-                ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonSwapMakerFeeGive);
+                balanceChanges.ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonSwapMakerFeeGive);
             }
 
             // Store swap data
@@ -1194,6 +1208,8 @@ namespace switcheo
                 FeeAmount = feeAmount,
                 active = true
             };
+
+            ExecuteBalanceChanges(balanceChanges);
             Storage.Put(Context(), SwapKey(hashedSecret), swap.Serialize());
             EmitSwapCreated(makerAddress, takerAddress, assetID, amount, hashedSecret, expiryTime, feeAssetID, feeAmount);
 
@@ -1213,15 +1229,19 @@ namespace switcheo
             var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
             var swapAmountAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
 
+            var balanceChanges = NewBalanceChanges();
+
             // Move tokens to the target address
-            IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonSwapTakerReceive);
+            balanceChanges.IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonSwapTakerReceive);
 
             // Send fees to fee address
             var feeAdress = GetFeeAddress();
-            IncreaseBalance(feeAdress, swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
+            balanceChanges.IncreaseBalance(feeAdress, swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
 
             // Update that swap has been completed
             swap.active = false;
+
+            ExecuteBalanceChanges(balanceChanges);
             Storage.Put(Context(), SwapKey(hashedSecret), swap.Serialize());
             EmitSwapExecuted(hashedSecret);
             return true;
@@ -1251,15 +1271,17 @@ namespace switcheo
                 cancelFeeAmount = swap.FeeAmount;
             }
 
+            var balanceChanges = NewBalanceChanges();
+
             // Return tokens to the original maker
             if (deductFeesSeparately)
             {
                 // Return full amount locked
-                IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonSwapCancelMakerReceive);
+                balanceChanges.IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonSwapCancelMakerReceive);
                 // Return full fee amount - cancelFeeAmount
                 if (swap.FeeAmount - cancelFeeAmount > 0)
                 {
-                    IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount - cancelFeeAmount, ReasonSwapCancelFeeRefundReceive);
+                    balanceChanges.IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount - cancelFeeAmount, ReasonSwapCancelFeeRefundReceive);
                 }
             }
             else
@@ -1267,17 +1289,18 @@ namespace switcheo
                 // Deduct fee from swap amount
                 var amountToRefundAfterFees = swap.Amount - cancelFeeAmount;
                 // Refund remaining swap amount
-                IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonSwapCancelMakerReceive);
+                balanceChanges.IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonSwapCancelMakerReceive);
             }
 
             // Send cancel fees to fee address
             if (cancelFeeAmount > 0)
             {
-                IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, cancelFeeAmount, ReasonSwapCancelFeeReceive);
+                balanceChanges.IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, cancelFeeAmount, ReasonSwapCancelFeeReceive);
             }
 
             // Update that swap has been cancelled
             swap.active = false;
+            ExecuteBalanceChanges(balanceChanges);
             Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
             EmitSwapCancelled(hashOfSecret, cancelFeeAmount);
 
@@ -1308,53 +1331,6 @@ namespace switcheo
         {
             // Delete offer data
             Storage.Delete(Context(), OfferKey(offerHash));
-        }
-
-        private static bool IncreaseBalance(byte[] originator, byte[] assetID, BigInteger amount, byte[] reason)
-        {
-            if (amount < 1) throw new ArgumentOutOfRangeException();
-
-            var key = BalanceKey(originator);
-            var serializedBalances = Storage.Get(Context(), key);
-            Map<byte[], BigInteger> balances;
-            // Check if there is an existing record of user
-            if (serializedBalances.Length > 1)
-            {
-                balances = (Map<byte[], BigInteger>)serializedBalances.Deserialize();
-            }
-            else // Else create it
-            {
-                balances = new Map<byte[], BigInteger>();
-            }
-            // Check if assetID has been saved in map then add to it, else save new amount to it
-            balances[assetID] = balances.HasKey(assetID) ? balances[assetID] + amount : amount;
-            Storage.Put(Context(), key, balances.Serialize());
-            EmitTransferred(originator, assetID, amount, reason);
-
-            return true;
-        }
-
-        private static bool ReduceBalance(byte[] address, byte[] assetID, BigInteger amount, byte[] reason)
-        {
-            if (amount < 1) throw new ArgumentOutOfRangeException();
-
-            var key = BalanceKey(address);
-            var balances = (Map<byte[], BigInteger>)Storage.Get(Context(), key).Deserialize();
-
-            if (balances.HasKey(assetID))
-            {
-                balances[assetID] -= amount;
-                if (balances[assetID] < 0) return false;
-            }
-            else
-            {
-                throw new Exception("No existing balance to reduce");
-            }
-
-            Storage.Put(Context(), key, balances.Serialize());
-            EmitTransferred(address, assetID, 0 - amount, reason);
-
-            return true;
         }
 
         /***********
@@ -1426,7 +1402,9 @@ namespace switcheo
             if (!IsAddressValid(originator)) return false;
             if (amount < 1) return false;
             // Update balances first
-            IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+            var balanceChanges = NewBalanceChanges();
+            balanceChanges.IncreaseBalance(originator, assetID, amount, ReasonDeposit);
+            ExecuteBalanceChanges(balanceChanges);
             EmitDeposited(originator, assetID, amount);
 
             return true;
@@ -1472,17 +1450,20 @@ namespace switcheo
                 }
             }
 
+            var balanceChanges = NewBalanceChanges();
             byte[] firstAvailableAddress = references[0].ScriptHash;
             if (sentGasAmount > 0)
             {
-                IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
+                balanceChanges.IncreaseBalance(firstAvailableAddress, GasAssetID, sentGasAmount, ReasonDeposit);
                 EmitDeposited(firstAvailableAddress, GasAssetID, sentGasAmount);
             }
             if (sentNeoAmount > 0)
             {
-                IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
+                balanceChanges.IncreaseBalance(firstAvailableAddress, NeoAssetID, sentNeoAmount, ReasonDeposit);
                 EmitDeposited(firstAvailableAddress, NeoAssetID, sentNeoAmount);
             }
+
+            ExecuteBalanceChanges(balanceChanges);
 
             return true;
         }
@@ -1554,11 +1535,8 @@ namespace switcheo
                 }
 
                 // Attempt to reduce contract balance
-                if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal))
-                {
-                    Runtime.Log("Reduce balance for withdrawal failed");
-                    return false;
-                }
+                var balanceChanges = NewBalanceChanges();
+                balanceChanges.ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal);
 
                 // Clear withdrawing announcement by user for this asset if any withdrawal is successful because it would mean that withdrawal is working correctly and exchange is in action
                 var key = WithdrawAnnounceKey(withdrawingAddr, assetID);
@@ -1609,11 +1587,8 @@ namespace switcheo
                     }
 
                     // Attempt to reduce contract balance
-                    if (!ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal))
-                    {
-                        Runtime.Log("Reduce balance for withdrawal failed");
-                        return false;
-                    }
+                    var balanceChanges = NewBalanceChanges();
+                    balanceChanges.ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal);
 
                     // Execute withdrawal
                     TransferNEP5(ExecutionEngine.ExecutingScriptHash, withdrawingAddr, assetID, amount);
