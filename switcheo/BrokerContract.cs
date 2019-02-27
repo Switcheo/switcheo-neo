@@ -510,6 +510,24 @@ namespace switcheo
                     if (args.Length != 2) return false;
                     return CancelAtomicSwap((byte[])args[0], (BigInteger)args[1]);
                 }
+                if (operation == "approveSpender") // (address, spender)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 2) return false;
+                    return ApproveSpender((byte[])args[0], (byte[])args[1]);
+                }
+                if (operation == "rescindApproval") // (address, spender)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 2) return false;
+                    return RescindApproval((byte[])args[0], (byte[])args[1]);
+                }
+                if (operation == "spendFrom") // (from, to, amount, assetID, decreaseFromReason, increaseToReason)
+                {
+                    if (GetState() == Pending) return false;
+                    if (args.Length != 6) return false;
+                    return SpendFrom((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5], ExecutionEngine.CallingScriptHash);
+                }
 
                 // == Owner ==
                 if (!Runtime.CheckWitness(Owner))
@@ -787,7 +805,7 @@ namespace switcheo
 
         /// @notice Approve an address for spending any amount of
         /// any token from the `msg.sender`'s balances
-        /// @dev Analogous to ERC-20 `approve`, with the following differences:
+        /// @dev Analogous to NEP-5 `approve`, with the following differences:
         ///     - `_spender` must be whitelisted by owner
         ///     - approval can be rescinded at a later time by the user
         ///       iff it has been removed from the whitelist
@@ -799,7 +817,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(address)) return false;
             // Check spender is approved
             var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
-            if (!(isWhitelisted.Length > 0 && isWhitelisted == Active)) return false;
+            if (isWhitelisted != Active) return false;
             Storage.Put(Context(), ApproveSpenderKey(address, spender), Active);
             EmitSpenderApproved(address, spender);
             return true;
@@ -817,7 +835,7 @@ namespace switcheo
             if (!Runtime.CheckWitness(address)) return false;
             // Check spender must be removed from the whitelist
             var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
-            if (isWhitelisted.Length > 0 && isWhitelisted == Active) return false;
+            if (isWhitelisted == Active) return false;
 
             Storage.Delete(Context(), ApproveSpenderKey(address, spender));
             EmitSpenderRescind(address, spender);
@@ -825,7 +843,7 @@ namespace switcheo
         }
 
         /// @notice Transfers tokens from one address to another
-        /// @dev Analogous to ERC-20 `transferFrom`, with the following differences:
+        /// @dev Analogous to NEP-5 `transferFrom`, with the following differences:
         ///     - the address of the token to transfer must be specified
         ///     - any amount of token can be transferred, as long as it is less or equal
         ///       to `_from`'s balance
@@ -837,19 +855,19 @@ namespace switcheo
         /// @param asset The address of the token to transfer
         /// @param decreaseReason A reason code to emit in the `BalanceDecrease` event
         /// @param increaseReason A reason code to emit in the `BalanceIncrease` event
-        private static bool SpendFrom(byte[] from, byte[] to, BigInteger amount, byte[] assetID, byte[] decreaseReason, byte[] increaseReason)
+        private static bool SpendFrom(byte[] from, byte[] to, BigInteger amount, byte[] assetID, byte[] decreaseFromReason, byte[] increaseToReason, byte[] callingScriptHash)
         {
-            if (!IsValidUnusedReasonCode(decreaseReason)) return false;
-            if (!IsValidUnusedReasonCode(increaseReason)) return false;
+            if (!IsValidUnusedReasonCode(decreaseFromReason)) return false;
+            if (!IsValidUnusedReasonCode(increaseToReason)) return false;
             if (!IsAddressValid(from) || !IsAddressValid(to)) return false;
             if (!Runtime.CheckWitness(from)) return false;
             // Check spender is approved
-            var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(ExecutionEngine.CallingScriptHash));
-            if (!(isWhitelisted.Length > 0 && isWhitelisted == Active)) return false;
+            var isWhitelisted = Storage.Get(Context(), ApproveSpenderKey(from, callingScriptHash));
+            if (isWhitelisted != Active) return false;
 
             var balanceChanges = NewBalanceChanges();
-            balanceChanges.ReduceBalance(from, assetID, amount, decreaseReason);
-            balanceChanges.IncreaseBalance(to, assetID, amount, increaseReason);
+            balanceChanges.ReduceBalance(from, assetID, amount, decreaseFromReason);
+            balanceChanges.IncreaseBalance(to, assetID, amount, increaseToReason);
             ExecuteBalanceChanges(balanceChanges);
             return true;
         }
@@ -1010,7 +1028,7 @@ namespace switcheo
 
             var balanceChanges = NewBalanceChanges();
             // Reduce balance from filler
-            balanceChanges.ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerFeeGive);
+            balanceChanges.ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerGive);
 
             // Move filled asset to the maker balance
             balanceChanges.IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
@@ -1134,7 +1152,7 @@ namespace switcheo
 
             // Ensure parameters are correct
             if (!IsAddressValid(originator) || !IsAddressValid(counterparty) || !IsAssetLengthValid(combinedAssetID)) return false;
-            if (dustAssetIDs.Length == 0 || dustAssetIDs.Length != dustAmounts.Length) return false;
+            if (dustAssetIDs.Length != dustAmounts.Length) return false;
 
             var balanceChanges = NewBalanceChanges();
 
@@ -1220,17 +1238,16 @@ namespace switcheo
         {
             // Check that swap exists and is not already completed or cancelled
             var swap = GetSwap(hashedSecret);
+
             if (swap.MakerAddress.Length == 0 || !swap.active) return false;
-
             // Verify pre-image
-            if (Sha256(preImage) != hashedSecret) return false;
 
-            // Get balances
+            if (Sha256(Sha256(preImage)).Reverse() != hashedSecret) return false;
+
             var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
             var swapAmountAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
 
             var balanceChanges = NewBalanceChanges();
-
             // Move tokens to the target address
             balanceChanges.IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonSwapTakerReceive);
 
@@ -1592,6 +1609,8 @@ namespace switcheo
 
                     // Execute withdrawal
                     TransferNEP5(ExecutionEngine.ExecutingScriptHash, withdrawingAddr, assetID, amount);
+
+                    ExecuteBalanceChanges(balanceChanges);
 
                     // Notify clients
                     EmitWithdrawing(withdrawingAddr, assetID, amount);

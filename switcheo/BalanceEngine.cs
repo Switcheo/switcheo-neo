@@ -38,11 +38,7 @@ namespace switcheo
             };
             if (balanceChanges.HasKey(address))
             {
-                var changes = balanceChanges[address];
-
-                Append(changes, balanceChange);
-
-                balanceChanges[address] = changes;
+                Append(balanceChanges[address], balanceChange);
             }
             else
             {
