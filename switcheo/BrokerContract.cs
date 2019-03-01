@@ -41,10 +41,22 @@ namespace switcheo
 
         [DisplayName("withdrawn")]
         public static event Action<byte[], byte[], BigInteger, byte[]> EmitWithdrawn; // (address, assetID, amount, utxoUsed)
+
         // Emitted when a user approved a spender not of this contract
+        [DisplayName("spenderApproved")]
         public static event Action<byte[], byte[]> EmitSpenderApproved; // (user, spender)
+
         // Emitted when a user rescinds approval for a spender not of this contract
-        public static event Action<byte[], byte[]> EmitSpenderRescind; // (user, spender)
+        [DisplayName("spenderRescinded")]
+        public static event Action<byte[], byte[]> EmitSpenderRescinded; // (user, spender)
+
+        // Emitted when the contract owner whitelists a spender not of this contract for users to approve
+        [DisplayName("spenderAdded")]
+        public static event Action<byte[]> EmitSpenderAdded; // (spender)
+
+        // Emitted when the contract owner removes a whitelisted spender so that users can rescind approval
+        [DisplayName("spenderRemoved")]
+        public static event Action<byte[]> EmitSpenderRemoved; // (spender)
 
         [DisplayName("burnt")]
         public static event Action<byte[], byte[], BigInteger> EmitBurnt; // (address, assetID, amount)
@@ -492,7 +504,7 @@ namespace switcheo
                     if (args.Length != 6) return false;
                     return SweepDustTokens((byte[])args[0], (byte[])args[1], (byte[][])args[2], (BigInteger[])args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
-                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire)
+                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire, feeAssetID, feeAmount)
                 {
                     if (GetState() == Pending) return false;
                     if (args.Length != 8) return false;
@@ -780,6 +792,7 @@ namespace switcheo
         {
             if (!IsAddressValid(spender)) return false;
             Storage.Put(Context(), WhitelistedSpenderKey(spender), Active);
+            EmitSpenderAdded(spender);
             return true;
         }
 
@@ -796,6 +809,7 @@ namespace switcheo
         {
             if (!IsAddressValid(spender)) return false;
             Storage.Delete(Context(), WhitelistedSpenderKey(spender));
+            EmitSpenderRemoved(spender);
             return true;
         }
 
@@ -815,7 +829,7 @@ namespace switcheo
         {
             if (!IsAddressValid(spender)) return false;
             if (!Runtime.CheckWitness(address)) return false;
-            // Check spender is approved
+            // Check spender is whitelisted
             var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
             if (isWhitelisted != Active) return false;
             Storage.Put(Context(), ApproveSpenderKey(address, spender), Active);
@@ -838,7 +852,7 @@ namespace switcheo
             if (isWhitelisted == Active) return false;
 
             Storage.Delete(Context(), ApproveSpenderKey(address, spender));
-            EmitSpenderRescind(address, spender);
+            EmitSpenderRescinded(address, spender);
             return true;
         }
 
@@ -861,9 +875,9 @@ namespace switcheo
             if (!IsValidUnusedReasonCode(increaseToReason)) return false;
             if (!IsAddressValid(from) || !IsAddressValid(to)) return false;
             if (!Runtime.CheckWitness(from)) return false;
-            // Check spender is approved
-            var isWhitelisted = Storage.Get(Context(), ApproveSpenderKey(from, callingScriptHash));
-            if (isWhitelisted != Active) return false;
+            // Check from address approved spender
+            var isApproved = Storage.Get(Context(), ApproveSpenderKey(from, callingScriptHash));
+            if (isApproved != Active) return false;
 
             var balanceChanges = NewBalanceChanges();
             balanceChanges.ReduceBalance(from, assetID, amount, decreaseFromReason);
@@ -871,8 +885,6 @@ namespace switcheo
             ExecuteBalanceChanges(balanceChanges);
             return true;
         }
-
-
 
         /***********
          * Trading *
@@ -1238,11 +1250,10 @@ namespace switcheo
         {
             // Check that swap exists and is not already completed or cancelled
             var swap = GetSwap(hashedSecret);
-
             if (swap.MakerAddress.Length == 0 || !swap.active) return false;
-            // Verify pre-image
 
-            if (Sha256(Sha256(preImage)).Reverse() != hashedSecret) return false;
+            // Verify pre-image
+            if (Hash256(preImage).Reverse() != hashedSecret) return false;
 
             var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
             var swapAmountAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
@@ -1252,8 +1263,11 @@ namespace switcheo
             balanceChanges.IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonSwapTakerReceive);
 
             // Send fees to fee address
-            var feeAdress = GetFeeAddress();
-            balanceChanges.IncreaseBalance(feeAdress, swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
+            if (swap.FeeAmount > 0)
+            {
+                var feeAddress = GetFeeAddress();
+                balanceChanges.IncreaseBalance(feeAddress, swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
+            }
 
             // Update that swap has been completed
             swap.active = false;
