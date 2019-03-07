@@ -139,13 +139,14 @@ namespace switcheo
         private static readonly byte[] ReasonDeposit = { 0x01 }; // Balance increased due to deposit
         // Making an offer
         private static readonly byte[] ReasonMakerGive = { 0x02 }; // Balance reduced due to tokens locked when a maker makes an offer
-        private static readonly byte[] ReasonMakerFeeGive = { 0x10 }; // Balance reduced due to maker fees
+        private static readonly byte[] ReasonMakerFeeGive = { 0x10 }; // Balance reduced due to tokens locked for maker fees
         private static readonly byte[] ReasonTakerGive = { 0x03 }; // Balance reduced due to taker filling maker's wanted asset
         private static readonly byte[] ReasonTakerFeeGive = { 0x04 }; // Balance reduced due to taker fees
         private static readonly byte[] ReasonTakerReceive = { 0x05 }; // Balance increased due to taker receiving his cut in the trade
         private static readonly byte[] ReasonMakerReceive = { 0x06 }; // Balance increased due to maker receiving his cut in the trade
         private static readonly byte[] ReasonTakerFeeReceive = { 0x07 }; // Balance increased on fee address due to contract receiving taker fee
         private static readonly byte[] ReasonMakerFeeReceive = { 0x11 }; // Balance increased on fee address due to contract receiving maker fee
+        private static readonly byte[] ReasonMakerFeeRefund = { 0x1A }; // Balance increased on maker address due to refunding remaining locked fees when cancelling an offer
         private static readonly byte[] ReasonCancel = { 0x08 }; // Balance increased due to cancelling offer
         private static readonly byte[] ReasonWithdrawal = { 0x09 }; // Balance reduced due to withdrawal from contract
         private static readonly byte[] ReasonSweeperGive = { 0x16 }; // Balance reduced due to sweeper sweeping dust token from contract balance
@@ -161,6 +162,7 @@ namespace switcheo
         private static readonly byte[] ReasonFillingLessThanOne = { 0x25 }; // Filling less than 1 token when trying to fill
         private static readonly byte[] ReasonNotEnoughBalanceOnFiller = { 0x26 }; // Not enough balance to give (wantAssetID) for what you want to take (offerAssetID)
         private static readonly byte[] ReasonNotEnoughBalanceOnNativeToken = { 0x27 }; // Not enough balance in native tokens to use
+        private static readonly byte[] ReasonNotEnoughBalanceOnRemainingMakerFee = { 0x28 }; // Not enough balance in offer's remaining maker fee deductible
 
         // Atomic Swaps Balance Change Reason Codes
 
@@ -185,6 +187,8 @@ namespace switcheo
             public byte[] WantAssetID;
             public BigInteger WantAmount;
             public BigInteger AvailableAmount;
+            public byte[] MakerFeeAssetID;
+            public BigInteger MakerFeeAvailableAmount;
             public byte[] Nonce;
         }
 
@@ -230,6 +234,7 @@ namespace switcheo
             byte[] makerAddress,
             byte[] offerAssetID, byte[] offerAmount,
             byte[] wantAssetID, byte[] wantAmount,
+            byte[] makerFeeAssetID, byte[] makerFeeAvailableAmount,
             byte[] nonce
         )
         {
@@ -241,6 +246,8 @@ namespace switcheo
                 WantAssetID = wantAssetID,
                 WantAmount = wantAmount.AsBigInteger(),
                 AvailableAmount = offerAmount.AsBigInteger(),
+                MakerFeeAssetID = makerFeeAssetID,
+                MakerFeeAvailableAmount = makerFeeAvailableAmount.AsBigInteger(),
                 Nonce = nonce,
             };
         }
@@ -254,7 +261,8 @@ namespace switcheo
             public BigInteger ExpiresAt;
             public byte[] FeeAssetID;
             public BigInteger FeeAmount;
-            public bool active;
+            public bool BurnTokens;
+            public bool Active;
         }
 
         private struct AnnouncementInfo
@@ -456,18 +464,18 @@ namespace switcheo
                     if (!ReceivedNEP5((byte[])args[0], MctAssetID, (BigInteger)args[2])) throw new Exception("ReceivedNEP5 onTransfer failed!");
                     return true;
                 }
-                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, nonce, makerFeeAssetID, makerFeeAmount, burnTokens)
+                if (operation == "makeOffer") // (makerAddress, offerAssetID, offerAmount, wantAssetID, wantAmount, makerFeeAssetID, makerFeeAvailableAmount, nonce)
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 9) return false;
-                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5]);
-                    return MakeOffer(offer, (byte[])args[6], (BigInteger)args[7], (bool)args[8]);
+                    if (args.Length != 8) return false;
+                    var offer = NewOffer((byte[])args[0], (byte[])args[1], (byte[])args[2], (byte[])args[3], (byte[])args[4], (byte[])args[5], (byte[])args[6], (byte[])args[7]);
+                    return MakeOffer(offer);
                 }
-                if (operation == "fillOffer") // fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount)
+                if (operation == "fillOffer") // (fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, burnTakerFees, makerFeeAmount, burnMakerFees)
                 {
                     if (GetState() != Active) return false;
-                    if (args.Length != 6) return false;
-                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3], (BigInteger)args[4], (bool)args[5]);
+                    if (args.Length != 8) return false;
+                    return FillOffer((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3], (BigInteger)args[4], (bool)args[5], (BigInteger)args[6], (bool)args[7]);
                 }
                 if (operation == "cancelOffer") // (offerHash)
                 {
@@ -504,11 +512,11 @@ namespace switcheo
                     if (args.Length != 6) return false;
                     return SweepDustTokens((byte[])args[0], (byte[])args[1], (byte[][])args[2], (BigInteger[])args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
-                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire, feeAssetID, feeAmount)
+                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire, feeAssetID, feeAmount, burnTokens)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 8) return false;
-                    return CreateAtomicSwap((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5], (byte[])args[6], (BigInteger)args[7]);
+                    if (args.Length != 9) return false;
+                    return CreateAtomicSwap((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5], (byte[])args[6], (BigInteger)args[7], (bool)args[8]);
                 }
                 if (operation == "executeAtomicSwap") // (hashOfSecret, preImage)
                 {
@@ -516,11 +524,11 @@ namespace switcheo
                     if (args.Length != 2) return false;
                     return ExecuteAtomicSwap((byte[])args[0], (byte[])args[1]);
                 }
-                if (operation == "cancelAtomicSwap") // (hashOfSecret)
+                if (operation == "cancelAtomicSwap") // (hashOfSecret, cancelFeeAmount, burnCancelFees)
                 {
                     if (GetState() == Pending) return false;
-                    if (args.Length != 2) return false;
-                    return CancelAtomicSwap((byte[])args[0], (BigInteger)args[1]);
+                    if (args.Length != 3) return false;
+                    return CancelAtomicSwap((byte[])args[0], (BigInteger)args[1], (bool)args[2]);
                 }
                 if (operation == "approveSpender") // (address, spender)
                 {
@@ -890,7 +898,7 @@ namespace switcheo
          * Trading *
          ***********/
 
-        private static bool MakeOffer(Offer offer, byte[] makerFeeAssetID, BigInteger makerFeeAmount, bool burnTokens)
+        private static bool MakeOffer(Offer offer)
         {
             // Check that transaction is signed by the maker and coordinator
             if (!CheckTradeWitnesses(offer.MakerAddress)) return false;
@@ -906,48 +914,29 @@ namespace switcheo
             if (offer.OfferAssetID == offer.WantAssetID) return false;
 
             // Check that asset IDs are valid
-            if ((!IsAssetLengthValid(offer.OfferAssetID)) || (!IsAssetLengthValid(offer.WantAssetID))) return false;
+            if (!IsAssetLengthValid(offer.OfferAssetID) || !IsAssetLengthValid(offer.WantAssetID) || !IsAssetLengthValid(offer.MakerFeeAssetID)) return false;
 
             // Check fees
-            if (!IsAssetLengthValid(makerFeeAssetID)) return false;
-            if (makerFeeAmount < 0) return false;
+            if (offer.MakerFeeAvailableAmount < 0) return false;
 
-            // Check that there are enough assets to be deducted for fees
-            if (GetBalance(offer.MakerAddress, makerFeeAssetID) < makerFeeAmount) return false;
-
-            // Check if we should deduct fees separately from the taker amount
-            bool deductFeesSeparately = makerFeeAssetID != offer.OfferAssetID;
-
-            var totalAmount = deductFeesSeparately ? offer.OfferAmount : offer.OfferAmount + makerFeeAmount;
+            // Check that there are enough assets to be deducted for fees (This should still be true even if fee asset is same as offer asset)
+            if (GetBalance(offer.MakerAddress, offer.MakerFeeAssetID) < offer.MakerFeeAvailableAmount) return false;
 
             var balanceChanges = NewBalanceChanges();
             // Reduce available balance for the offered asset and amount
-            balanceChanges.ReduceBalance(offer.MakerAddress, offer.OfferAssetID, totalAmount, ReasonMakerGive);
+            balanceChanges.ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, ReasonMakerGive);
 
-            // Add the offer to storage
-            StoreOffer(offerHash, offer);
-
-            // Move fees
-            if (makerFeeAmount > 0)
+            // Reserve fees from the maker fee asset only if it is different from want asset
+            if (offer.MakerFeeAvailableAmount > 0 && offer.MakerFeeAssetID != offer.WantAssetID)
             {
-                if (deductFeesSeparately)
-                {
-                    // Reduce fees here separately as it is a different asset type
-                    balanceChanges.ReduceBalance(offer.MakerAddress, makerFeeAssetID, makerFeeAmount, ReasonMakerFeeGive);
-                }
-                if (!burnTokens)
-                {
-                    // Only increase fee address balance if not burning
-                    balanceChanges.IncreaseBalance(GetFeeAddress(), makerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
-                }
-                else
-                {
-                    // Emit burnt event for easier client tracking
-                    EmitBurnt(offer.MakerAddress, makerFeeAssetID, makerFeeAmount);
-                }
+                // Reduce fees here separately as it is a different asset type
+                balanceChanges.ReduceBalance(offer.MakerAddress, offer.MakerFeeAssetID, offer.MakerFeeAvailableAmount, ReasonMakerFeeGive);
             }
 
             ExecuteBalanceChanges(balanceChanges);
+
+            // Add the offer to storage
+            StoreOffer(offerHash, offer);
 
             // Notify clients
             EmitCreated(offer.MakerAddress, offerHash, offer.OfferAssetID, offer.OfferAmount, offer.WantAssetID, offer.WantAmount);
@@ -957,7 +946,7 @@ namespace switcheo
         // Fills an offer by taking the amount you want
         // => amountToFill's asset type = offer's wantAssetID
         // amountToTake's asset type = offerAssetID (taker is taking what is offered)
-        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToTake, byte[] takerFeeAssetID, BigInteger takerFeeAmount, bool burnTokens)
+        private static bool FillOffer(byte[] fillerAddress, byte[] offerHash, BigInteger amountToTake, byte[] takerFeeAssetID, BigInteger takerFeeAmount, bool burnTakerFee, BigInteger makerFeeAmount, bool burnMakerFee)
         {
             // Note: We do all checks first then execute state changes
 
@@ -967,6 +956,7 @@ namespace switcheo
             // Check fees
             if (!IsAssetLengthValid(takerFeeAssetID)) return false;
             if (takerFeeAmount < 0) return false;
+            if (makerFeeAmount < 0) return false;
 
             // Check that the offer still exists
             Offer offer = GetOffer(offerHash);
@@ -1029,44 +1019,72 @@ namespace switcheo
             }
 
             // Check if we should deduct fees separately from the taker amount
-            bool deductFeesSeparately = takerFeeAssetID != offer.OfferAssetID;
+            bool deductTakerFeesSeparately = takerFeeAssetID != offer.OfferAssetID;
 
             // Check that there is enough balance in native fees if using native fees
-            if (deductFeesSeparately && takerFeeAmount > 0 && fillerBalances.HasKey(takerFeeAssetID) && fillerBalances[takerFeeAssetID] < takerFeeAmount)
+            if (deductTakerFeesSeparately && takerFeeAmount > 0 && fillerBalances.HasKey(takerFeeAssetID) && fillerBalances[takerFeeAssetID] < takerFeeAmount)
             {
                 EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnNativeToken);
                 return false;
             }
 
+            // Check that maker fee does not exceed remaining amount that can be deducted as maker fees
+            if (offer.MakerFeeAvailableAmount < makerFeeAmount)
+            {
+                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnRemainingMakerFee);
+                return false;
+            }
+
+            // Check if we should deduct fees separately from the maker receiving amount
+            bool deductMakerFeesSeparately = offer.MakerFeeAssetID != offer.WantAssetID;
+
             var balanceChanges = NewBalanceChanges();
+
             // Reduce balance from filler
             balanceChanges.ReduceBalance(fillerAddress, offer.WantAssetID, amountToFill, ReasonTakerGive);
 
-            // Move filled asset to the maker balance
-            balanceChanges.IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountToFill, ReasonMakerReceive);
+            // Move filled asset to the maker balance (reduce fees if needed)
+            var amountForMakerAfterFees = deductMakerFeesSeparately ? amountToFill : amountToFill - makerFeeAmount;
+            balanceChanges.IncreaseBalance(offer.MakerAddress, offer.WantAssetID, amountForMakerAfterFees, ReasonMakerReceive);
 
             // Move taken asset to the taker balance
-            var amountToTakeAfterFees = deductFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
+            var amountToTakeAfterFees = deductTakerFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
             balanceChanges.IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
             // Move fees
             if (takerFeeAmount > 0)
             {
-                if (deductFeesSeparately)
+                if (deductTakerFeesSeparately)
                 {
-                    // Reduce fees here separately as it is a different asset type
+                    // Reduce fees here from contract balance separately as it is a different asset type
                     fillerBalances[takerFeeAssetID] -= takerFeeAmount;
                     EmitTransferred(fillerAddress, takerFeeAssetID, 0 - takerFeeAmount, ReasonTakerFeeGive);
                 }
-                if (!burnTokens)
+                if (burnTakerFee)
+                {
+                    // Emit burnt event for easier client tracking
+                    EmitBurnt(fillerAddress, takerFeeAssetID, takerFeeAmount);
+                }
+                else
                 {
                     // Only increase fee address balance if not burning
                     balanceChanges.IncreaseBalance(GetFeeAddress(), takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
                 }
-                else
+            }
+            if (makerFeeAmount > 0)
+            {
+                // Reduce from available maker fees here
+                offer.MakerFeeAvailableAmount = offer.MakerFeeAvailableAmount - makerFeeAmount;
+
+                if (burnMakerFee)
                 {
                     // Emit burnt event for easier client tracking
-                    EmitBurnt(fillerAddress, takerFeeAssetID, takerFeeAmount);
+                    EmitBurnt(fillerAddress, offer.MakerFeeAssetID, makerFeeAmount);
+                }
+                else
+                {
+                    // Only increase fee address balance if not burning
+                    balanceChanges.IncreaseBalance(GetFeeAddress(), offer.MakerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
                 }
             }
 
@@ -1098,10 +1116,19 @@ namespace switcheo
 
             // Check that transaction is signed by the canceller or trading is frozen
             if (!(Runtime.CheckWitness(offer.MakerAddress) || (IsTradingFrozen() && coordinatorWitnessed))) return false;
-
-            // Move tokens to maker address
+            
+            // Move tokens back to maker address
             var balanceChanges = NewBalanceChanges();
             balanceChanges.IncreaseBalance(offer.MakerAddress, offer.OfferAssetID, offer.AvailableAmount, ReasonCancel);
+
+            // Check if maker fees were deducted from maker and reserved in offer separately
+            bool deductMakerFeesSeparately = offer.MakerFeeAssetID != offer.WantAssetID;
+            // Refund fees if fees were separately deducted
+            if (deductMakerFeesSeparately && offer.MakerFeeAvailableAmount > 0)
+            {
+                balanceChanges.IncreaseBalance(offer.MakerAddress, offer.MakerFeeAssetID, offer.MakerFeeAvailableAmount, ReasonMakerFeeRefund);
+            }
+
             ExecuteBalanceChanges(balanceChanges);
 
             // Remove offer
@@ -1194,19 +1221,22 @@ namespace switcheo
             return true;
         }
 
-        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger expiryTime, byte[] feeAssetID, BigInteger feeAmount)
+        // Creates an atomic swap
+        // Swap fee is just the fee charged in this blockchain
+        // Whether swap fee is charged depends whether the swap creator is the taker or maker in the context of the trade and if fee is required in either case (Coordinator should take care of this)
+        private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger expiryTime, byte[] feeAssetID, BigInteger feeAmount, bool burnTokens)
         {
             // Check that parameters are valid
             if (!IsAddressValid(makerAddress) || !IsAddressValid(takerAddress) || hashedSecret.Length != 32 || !IsAssetLengthValid(assetID)) return false;
             if (amount < 1 || feeAmount < 0 || expiryTime < Runtime.Time) return false;
 
-            // Check that transaction is signed by maker
+            // Check that transaction is signed by maker and coordinator
             if (!CheckTradeWitnesses(makerAddress)) return false;
 
             // Check that there is no existing swap of the same hash
             var prevSwap = GetSwap(hashedSecret);
             if (prevSwap.MakerAddress.Length != 0) return false;
-            
+
             var deductFeesSeparately = feeAssetID != assetID;
             
             // will deduct fees from locked asset
@@ -1216,12 +1246,13 @@ namespace switcheo
             }
 
             var balanceChanges = NewBalanceChanges();
-
-            // Reduce contract balance from maker to lock amount
+            
+            // Reduce contract balance from creator to lock in amount
             balanceChanges.ReduceBalance(makerAddress, assetID, amount, ReasonSwapMakerGive);
 
-            // If fees are of a different asset, reduce fees from maker balance
-            if (feeAmount > 0 && deductFeesSeparately)
+            // If fees are of a different asset, reduce fees from creator balance as this would represent his fees on this blockchain
+            // else if fee is of the same asset, it will represent the counterparty's fee
+            if (deductFeesSeparately && feeAmount > 0)
             {
                 balanceChanges.ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonSwapMakerFeeGive);
             }
@@ -1236,7 +1267,8 @@ namespace switcheo
                 ExpiresAt = expiryTime,
                 FeeAssetID = feeAssetID,
                 FeeAmount = feeAmount,
-                active = true
+                BurnTokens = burnTokens,
+                Active = true
             };
 
             ExecuteBalanceChanges(balanceChanges);
@@ -1250,27 +1282,35 @@ namespace switcheo
         {
             // Check that swap exists and is not already completed or cancelled
             var swap = GetSwap(hashedSecret);
-            if (swap.MakerAddress.Length == 0 || !swap.active) return false;
+            if (swap.MakerAddress.Length == 0 || !swap.Active) return false;
 
             // Verify pre-image
             if (Hash256(preImage).Reverse() != hashedSecret) return false;
 
-            var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
-            var swapAmountAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
-
             var balanceChanges = NewBalanceChanges();
+
+            var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
+            var amountForTakerAfterFees = deductFeesSeparately ? swap.Amount : swap.Amount - swap.FeeAmount;
             // Move tokens to the target address
-            balanceChanges.IncreaseBalance(swap.TakerAddress, swap.AssetID, swapAmountAfterFees, ReasonSwapTakerReceive);
+            balanceChanges.IncreaseBalance(swap.TakerAddress, swap.AssetID, amountForTakerAfterFees, ReasonSwapTakerReceive);
 
             // Send fees to fee address
             if (swap.FeeAmount > 0)
             {
-                var feeAddress = GetFeeAddress();
-                balanceChanges.IncreaseBalance(feeAddress, swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
+                if (swap.BurnTokens)
+                {
+                    // Emit burnt event for easier client tracking
+                    EmitBurnt(swap.TakerAddress, swap.FeeAssetID, swap.FeeAmount);
+                }
+                else
+                {
+                    // Increase fee address balance with fees
+                    balanceChanges.IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, swap.FeeAmount, ReasonSwapFeeReceive);
+                }
             }
 
             // Update that swap has been completed
-            swap.active = false;
+            swap.Active = false;
 
             ExecuteBalanceChanges(balanceChanges);
             Storage.Put(Context(), SwapKey(hashedSecret), swap.Serialize());
@@ -1278,11 +1318,11 @@ namespace switcheo
             return true;
         }
 
-        private static bool CancelAtomicSwap(byte[] hashOfSecret, BigInteger _cancelFeeAmount)
+        private static bool CancelAtomicSwap(byte[] hashOfSecret, BigInteger _cancelFeeAmount, bool burnCancelFee)
         {
             // Prevent double cancel. Check that swap exists and is not already completed or cancelled
             var swap = GetSwap(hashOfSecret);
-            if (swap.MakerAddress.Length == 0 || !swap.active) return false;
+            if (swap.MakerAddress.Length == 0 || !swap.Active) return false;
 
             // Check that the swap can be cancelled
             if (Runtime.Time < swap.ExpiresAt) return false;
@@ -1309,16 +1349,18 @@ namespace switcheo
             {
                 // Return full amount locked
                 balanceChanges.IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonSwapCancelMakerReceive);
-                // Return full fee amount - cancelFeeAmount
-                if (swap.FeeAmount - cancelFeeAmount > 0)
+
+                // Deduct cancel fee from swap.FeeAmount to get the amount to refund
+                var feesToRefund = swap.FeeAmount - cancelFeeAmount;
+                if (feesToRefund > 0)
                 {
-                    balanceChanges.IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, swap.FeeAmount - cancelFeeAmount, ReasonSwapCancelFeeRefundReceive);
+                    balanceChanges.IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, feesToRefund, ReasonSwapCancelFeeRefundReceive);
                 }
             }
             else
             {
-                // Deduct fee from swap amount
-                var amountToRefundAfterFees = swap.Amount - cancelFeeAmount;
+                // Deduct cancel fees directly from refund amount
+                var amountToRefundAfterFees = swap.Amount - cancelFeeAmount; // cancel fee is already checked to be less than feeAmount above
                 // Refund remaining swap amount
                 balanceChanges.IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonSwapCancelMakerReceive);
             }
@@ -1326,11 +1368,20 @@ namespace switcheo
             // Send cancel fees to fee address
             if (cancelFeeAmount > 0)
             {
-                balanceChanges.IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, cancelFeeAmount, ReasonSwapCancelFeeReceive);
+                if (burnCancelFee)
+                {
+                    // Emit burnt event for easier client tracking
+                    EmitBurnt(swap.MakerAddress, swap.FeeAssetID, cancelFeeAmount);
+                }
+                else
+                {
+                    // Increase fee address balance with fees
+                    balanceChanges.IncreaseBalance(GetFeeAddress(), swap.FeeAssetID, cancelFeeAmount, ReasonSwapCancelFeeReceive);
+                }
             }
 
             // Update that swap has been cancelled
-            swap.active = false;
+            swap.Active = false;
             ExecuteBalanceChanges(balanceChanges);
             Storage.Put(Context(), SwapKey(hashOfSecret), swap.Serialize());
             EmitSwapCancelled(hashOfSecret, cancelFeeAmount);
