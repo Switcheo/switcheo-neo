@@ -259,7 +259,7 @@ namespace switcheo
             public byte[] AssetID;
             public BigInteger Amount;
             public BigInteger ExpiresAt;
-            public BigInteger FeeAssetID;
+            public byte[] FeeAssetID;
             public BigInteger FeeAmount;
             public bool BurnTokens;
             public bool Active;
@@ -1222,8 +1222,8 @@ namespace switcheo
         }
 
         // Creates an atomic swap
-        // Swap fee always represents the fee charged on the offered asset (counterparty's fee)
-        // Whether swap fee is charged depends whether the swap creator is the taker or maker and if fee is charged in either case (Coordinator should take care of this)
+        // Swap fee is just the fee charged in this blockchain
+        // Whether swap fee is charged depends whether the swap creator is the taker or maker in the context of the trade and if fee is required in either case (Coordinator should take care of this)
         private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger expiryTime, byte[] feeAssetID, BigInteger feeAmount, bool burnTokens)
         {
             // Check that parameters are valid
@@ -1237,16 +1237,25 @@ namespace switcheo
             var prevSwap = GetSwap(hashedSecret);
             if (prevSwap.MakerAddress.Length != 0) return false;
 
+            var deductFeesSeparately = feeAssetID != assetID;
+            
             // will deduct fees from locked asset
-            if (feeAssetID == assetID && feeAmount > amount)
+            if (!deductFeesSeparately && feeAmount > amount)
             {
                 throw new Exception("Fee amount more than locking amount");
             }
 
             var balanceChanges = NewBalanceChanges();
             
-            // Reduce contract balance from maker to lock amount
+            // Reduce contract balance from creator to lock in amount
             balanceChanges.ReduceBalance(makerAddress, assetID, amount, ReasonSwapMakerGive);
+
+            // If fees are of a different asset, reduce fees from creator balance as this would represent his fees on this blockchain
+            // else if fee is of the same asset, it will represent the counterparty's fee
+            if (deductFeesSeparately && feeAmount > 0)
+            {
+                balanceChanges.ReduceBalance(makerAddress, feeAssetID, feeAmount, ReasonSwapMakerFeeGive);
+            }
 
             // Store swap data
             var swap = new Swap
@@ -1256,6 +1265,7 @@ namespace switcheo
                 AssetID = assetID,
                 Amount = amount,
                 ExpiresAt = expiryTime,
+                FeeAssetID = feeAssetID,
                 FeeAmount = feeAmount,
                 BurnTokens = burnTokens,
                 Active = true
