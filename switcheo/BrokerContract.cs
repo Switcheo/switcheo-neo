@@ -1273,7 +1273,7 @@ namespace switcheo
 
             ExecuteBalanceChanges(balanceChanges);
             Storage.Put(Context(), SwapKey(hashedSecret), swap.Serialize());
-            EmitSwapCreated(makerAddress, takerAddress, assetID, amount, hashedSecret, expiryTime, assetID, feeAmount);
+            EmitSwapCreated(makerAddress, takerAddress, assetID, amount, hashedSecret, expiryTime, feeAssetID, feeAmount);
 
             return true;
         }
@@ -1344,15 +1344,14 @@ namespace switcheo
 
             var balanceChanges = NewBalanceChanges();
 
-            // Deduct cancel fee from swap.FeeAmount
-            var feesToRefund = swap.FeeAmount - cancelFeeAmount;
-
             // Return tokens to the original maker
             if (deductFeesSeparately)
             {
                 // Return full amount locked
                 balanceChanges.IncreaseBalance(swap.MakerAddress, swap.AssetID, swap.Amount, ReasonSwapCancelMakerReceive);
-                // Return full fee amount - cancelFeeAmount
+
+                // Deduct cancel fee from swap.FeeAmount to get the amount to refund
+                var feesToRefund = swap.FeeAmount - cancelFeeAmount;
                 if (feesToRefund > 0)
                 {
                     balanceChanges.IncreaseBalance(swap.MakerAddress, swap.FeeAssetID, feesToRefund, ReasonSwapCancelFeeRefundReceive);
@@ -1360,8 +1359,8 @@ namespace switcheo
             }
             else
             {
-                // Add fees to refund to reduced amount (Because fees was added to the amount reduced during create step)
-                var amountToRefundAfterFees = swap.Amount + feesToRefund;
+                // Deduct cancel fees directly from refund amount
+                var amountToRefundAfterFees = swap.Amount - cancelFeeAmount; // cancel fee is already checked to be less than feeAmount above
                 // Refund remaining swap amount
                 balanceChanges.IncreaseBalance(swap.MakerAddress, swap.AssetID, amountToRefundAfterFees, ReasonSwapCancelMakerReceive);
             }
