@@ -290,10 +290,6 @@ namespace switcheo
                 if (GetState() == Pending) return false;
 
                 var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                var withdrawalStage = GetWithdrawalStage(currentTxn);
-                var withdrawingAddr = GetWithdrawalAddress(currentTxn);
-                var assetID = GetWithdrawalAsset(currentTxn);
-                var isWithdrawingNEP5 = IsToken(assetID);
                 var inputs = currentTxn.GetInputs();
                 var outputs = currentTxn.GetOutputs();
                 var references = currentTxn.GetReferences();
@@ -329,6 +325,12 @@ namespace switcheo
 
                 // Must be an InvocationTransaction if not a Contract or Claim
                 if (currentTxn.Type != InvocationTransactionType) return false;
+
+                // Expected to be a withdraw, so get withdrawal attributes
+                var withdrawalStage = GetWithdrawalStage(currentTxn);
+                var withdrawingAddr = GetWithdrawalAddress(currentTxn);
+                var assetID = GetWithdrawalAsset(currentTxn);
+                var isWithdrawingNEP5 = IsToken(assetID);
 
                 // Check that Application trigger will be tail called with the correct params
                 if (((InvocationTransaction)currentTxn).Script != WithdrawArgs.Concat(OpCode_TailCall).Concat(ExecutionEngine.ExecutingScriptHash)) return false;
