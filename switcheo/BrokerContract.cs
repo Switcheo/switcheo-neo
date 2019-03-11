@@ -1300,7 +1300,8 @@ namespace switcheo
                 if (swap.BurnTokens)
                 {
                     // Emit burnt event for easier client tracking
-                    EmitBurnt(swap.TakerAddress, swap.FeeAssetID, swap.FeeAmount);
+                    var feeGiver = deductFeesSeparately ? swap.MakerAddress : swap.TakerAddress;
+                    EmitBurnt(feeGiver, swap.FeeAssetID, swap.FeeAmount);
                 }
                 else
                 {
