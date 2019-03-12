@@ -340,7 +340,7 @@ namespace switcheo
                     // Check that this is a valid SystemAsset withdrawal
                     ulong amount = (ulong)outputs[0].Value;
                     if (amount == 0 || outputs.Length > 2 || isWithdrawingNEP5) return false;
-0
+
                     // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
                     if (!IsAllInputsUnreserved(inputs)) return false;
 
