@@ -434,7 +434,7 @@ namespace switcheo
                 if (operation == "getState") return GetState();
                 if (operation == "getOffer") return GetOffer((byte[])args[0]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
-                if (operation == "getIsWhitelisted") return GetIsWhitelisted((byte[])args[0]);  // (assetID)
+                if (operation == "getIsWhitelisted") return IsWhitelistedOldNEP5((byte[])args[0]);  // (assetID)
                 if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
                 if (operation == "getWithdrawCoordinatorAddress") return GetWithdrawCoordinatorAddress();
@@ -647,12 +647,6 @@ namespace switcheo
             {
                 return 0;
             }
-        }
-
-        private static bool GetIsWhitelisted(byte[] assetID)
-        {
-            if (!IsToken(assetID)) throw new ArgumentOutOfRangeException();
-            return Storage.Get(Context(), OldWhitelistKey(assetID)).Length > 0;
         }
 
         private static BigInteger GetAnnounceDelay()
