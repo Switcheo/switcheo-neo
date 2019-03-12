@@ -1059,7 +1059,7 @@ namespace switcheo
                 if (deductTakerFeesSeparately)
                 {
                     // Reduce fees here from contract balance separately as it is a different asset type
-                    fillerBalances[takerFeeAssetID] -= takerFeeAmount;
+                    balanceChanges.ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeGive);
                     EmitTransferred(fillerAddress, takerFeeAssetID, 0 - takerFeeAmount, ReasonTakerFeeGive);
                 }
                 if (burnTakerFee)
