@@ -68,13 +68,13 @@ namespace switcheo
         public static event Action EmitTradingResumed;
 
         [DisplayName("addedToWhitelist")]
-        public static event Action<byte[], int> EmitAddedToWhitelist; // (scriptHash, whitelistEnum)
+        public static event Action<byte[]> EmitAddedToWhitelist; // (scriptHash)
 
         [DisplayName("removedFromWhitelist")]
-        public static event Action<byte[], int> EmitRemovedFromWhitelist; // (scriptHash, whitelistEnum)
+        public static event Action<byte[]> EmitRemovedFromWhitelist; // (scriptHash)
 
         [DisplayName("whitelistSealed")]
-        public static event Action<int> EmitWhitelistSealed; // (whitelistEnum)
+        public static event Action EmitWhitelistSealed;
 
         [DisplayName("feeAddressSet")]
         public static event Action<byte[]> EmitFeeAddressSet; // (address)
@@ -434,7 +434,7 @@ namespace switcheo
                 if (operation == "getState") return GetState();
                 if (operation == "getOffer") return GetOffer((byte[])args[0]);
                 if (operation == "getBalance") return GetBalance((byte[])args[0], (byte[])args[1]);
-                if (operation == "getIsWhitelisted") return GetIsWhitelisted((byte[])args[0], (int)args[1]);  // (assetID, whitelistEnum)
+                if (operation == "getIsWhitelisted") return GetIsWhitelisted((byte[])args[0]);  // (assetID)
                 if (operation == "getFeeAddress") return GetFeeAddress();
                 if (operation == "getCoordinatorAddress") return GetCoordinatorAddress();
                 if (operation == "getWithdrawCoordinatorAddress") return GetWithdrawCoordinatorAddress();
@@ -593,18 +593,17 @@ namespace switcheo
                 }
                 if (operation == "addToWhitelist")
                 {
-                    if (args.Length != 2) return false;
-                    return AddToWhitelist((byte[])args[0], (int)args[1]);
+                    if (args.Length != 1) return false;
+                    return AddToWhitelist((byte[])args[0]);
                 }
                 if (operation == "removeFromWhitelist")
                 {
-                    if (args.Length != 2) return false;
-                    return RemoveFromWhitelist((byte[])args[0], (int)args[1]);
+                    if (args.Length != 1) return false;
+                    return RemoveFromWhitelist((byte[])args[0]);
                 }
                 if (operation == "sealWhitelist")
                 {
-                    if (args.Length != 1) return false;
-                    return SealWhitelist((int)args[0]);
+                    return SealWhitelist();
                 }
                 if (operation == "addSpender")
                 {
@@ -650,10 +649,10 @@ namespace switcheo
             }
         }
 
-        private static bool GetIsWhitelisted(byte[] assetID, int whitelistEnum)
+        private static bool GetIsWhitelisted(byte[] assetID)
         {
             if (!IsToken(assetID)) throw new ArgumentOutOfRangeException();
-            return Storage.Get(Context(), GetWhitelistKey(assetID, whitelistEnum)).Length > 0;
+            return Storage.Get(Context(), OldWhitelistKey(assetID)).Length > 0;
         }
 
         private static BigInteger GetAnnounceDelay()
@@ -698,6 +697,7 @@ namespace switcheo
 
         private static AnnouncementInfo GetAnnouncedWithdrawal(byte[] withdrawingAddr, byte[] assetID)
         {
+
             var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
             if (announce.Length == 0) return new AnnouncementInfo(); // not announced
             return (AnnouncementInfo)announce.Deserialize();
@@ -761,30 +761,30 @@ namespace switcheo
             return true;
         }
 
-        private static bool AddToWhitelist(byte[] scriptHash, int whitelistEnum)
+        private static bool AddToWhitelist(byte[] scriptHash)
         {
             if (!IsToken(scriptHash)) return false;
-            if (IsWhitelistSealed(whitelistEnum)) return false;
-            var key = GetWhitelistKey(scriptHash, whitelistEnum);
+            if (IsWhitelistSealed()) return false;
+            var key = OldWhitelistKey(scriptHash);
             Storage.Put(Context(), key, Active);
-            EmitAddedToWhitelist(scriptHash, whitelistEnum);
+            EmitAddedToWhitelist(scriptHash);
             return true;
         }
 
-        private static bool RemoveFromWhitelist(byte[] scriptHash, int whitelistEnum)
+        private static bool RemoveFromWhitelist(byte[] scriptHash)
         {
             if (!IsToken(scriptHash)) return false;
-            if (IsWhitelistSealed(whitelistEnum)) return false;
-            var key = GetWhitelistKey(scriptHash, whitelistEnum);
+            if (IsWhitelistSealed()) return false;
+            var key = OldWhitelistKey(scriptHash);
             Storage.Delete(Context(), key);
-            EmitRemovedFromWhitelist(scriptHash, whitelistEnum);
+            EmitRemovedFromWhitelist(scriptHash);
             return true;
         }
 
-        private static bool SealWhitelist(int whitelistEnum)
+        private static bool SealWhitelist()
         {
-            Storage.Put(Context(), GetWhitelistSealedKey(whitelistEnum), Active);
-            EmitWhitelistSealed(whitelistEnum);
+            Storage.Put(Context(), OldWhitelistSealedKey(), Active);
+            EmitWhitelistSealed();
             return true;
         }
 
@@ -881,10 +881,10 @@ namespace switcheo
         /// @param increaseReason A reason code to emit in the `BalanceIncrease` event
         private static bool SpendFrom(byte[] from, byte[] to, BigInteger amount, byte[] assetID, byte[] decreaseFromReason, byte[] increaseToReason, byte[] callingScriptHash)
         {
-            if (!IsValidUnusedReasonCode(decreaseFromReason)) return false;
-            if (!IsValidUnusedReasonCode(increaseToReason)) return false;
             if (!IsAddressValid(from) || !IsAddressValid(to)) return false;
+            if (amount < 0) return false;
             if (!Runtime.CheckWitness(from)) return false;
+
             // Check from address approved spender
             var isApproved = Storage.Get(Context(), ApproveSpenderKey(from, callingScriptHash));
             if (isApproved != Active) return false;
@@ -999,12 +999,8 @@ namespace switcheo
                 return false;
             }
 
-            // Get all balances needed
-            
-            var fillerBalanceKey = BalanceKey(fillerAddress);
-            var makerBalanceKey = BalanceKey(offer.MakerAddress);
-            var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), fillerBalanceKey).Deserialize();
-            var makerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), makerBalanceKey).Deserialize();
+            // Get filler balances needed
+            var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), BalanceKey(fillerAddress)).Deserialize();
 
             // Check that there is enough balance to reduce for filler
             if (!fillerBalances.HasKey(offer.WantAssetID))
@@ -1171,9 +1167,8 @@ namespace switcheo
             // Check that burn txn is authorized
             if (!CheckTradeWitnesses(address)) return false;
 
-            // Check that reason code is valid
-            var code = reasonCode.ToBigInteger();
-            if (code < 1 || code > 9) throw new ArgumentOutOfRangeException();
+            // Check parameters
+            if (!IsAssetLengthValid(assetID) || amount < 1) return false;
 
             // Reduce contract balance and emit burn event
             var balanceChanges = NewBalanceChanges();
@@ -1229,7 +1224,7 @@ namespace switcheo
         private static bool CreateAtomicSwap(byte[] makerAddress, byte[] takerAddress, byte[] assetID, BigInteger amount, byte[] hashedSecret, BigInteger expiryTime, byte[] feeAssetID, BigInteger feeAmount, bool burnTokens)
         {
             // Check that parameters are valid
-            if (!IsAddressValid(makerAddress) || !IsAddressValid(takerAddress) || hashedSecret.Length != 32 || !IsAssetLengthValid(assetID)) return false;
+            if (!IsAddressValid(makerAddress) || !IsAddressValid(takerAddress) || hashedSecret.Length != 32 || !IsAssetLengthValid(assetID) || !IsAssetLengthValid(feeAssetID)) return false;
             if (amount < 1 || feeAmount < 0 || expiryTime < Runtime.Time) return false;
 
             // Check that transaction is signed by maker and coordinator
@@ -1804,16 +1799,9 @@ namespace switcheo
             return Storage.Get(Context(), OldWhitelistKey(assetID)).Length > 0;
         }
 
-        private static bool IsWhitelistedNewNEP5(byte[] assetID)
+        private static bool IsWhitelistSealed()
         {
-            if (!IsToken(assetID)) return false;
-            if (assetID.AsBigInteger() == 0) return false;
-            return Storage.Get(Context(), NewWhitelistKey(assetID)).Length > 0;
-        }
-
-        private static bool IsWhitelistSealed(int whitelistEnum)
-        {
-            return Storage.Get(Context(), GetWhitelistSealedKey(whitelistEnum)).Length > 0;
+            return Storage.Get(Context(), OldWhitelistSealedKey()).Length > 0;
         }
 
         private static bool CheckTradeWitnesses(byte[] traderAddress)
@@ -1860,20 +1848,6 @@ namespace switcheo
             if (!(bool)contract("transferFrom", args)) throw new Exception("Failed to transfer NEP-5 tokens!");
         }
 
-        private static byte[] GetWhitelistKey(byte[] assetID, int whitelistEnum)
-        {
-            if (whitelistEnum == 0) return OldWhitelistKey(assetID);
-            if (whitelistEnum == 1) return NewWhitelistKey(assetID);
-            throw new ArgumentOutOfRangeException();
-        }
-
-        private static byte[] GetWhitelistSealedKey(int whitelistEnum)
-        {
-            if (whitelistEnum == 0) return "oldWhitelistSealed".AsByteArray();
-            if (whitelistEnum == 1) return "newWhitelistSealed".AsByteArray();
-            throw new ArgumentOutOfRangeException();
-        }
-
         private static bool IsToken(byte[] scriptHash)
         {
             return scriptHash.Length == 20;
@@ -1892,12 +1866,7 @@ namespace switcheo
         {
             return scriptHash.Length == 20;
         }
-
-        private static bool IsValidUnusedReasonCode(byte[] reasonCode)
-        {
-            return reasonCode.Length == 1 && !(reasonCode[0] <= 0x3D);
-        }
-
+        
         private static byte[] Hash(Offer o)
         {
             var offerAmountBytes = o.OfferAmount.AsByteArray();
@@ -1921,7 +1890,7 @@ namespace switcheo
         private static byte[] BalanceKey(byte[] originator) => "balances".AsByteArray().Concat(originator);
         private static byte[] WithdrawalAddressKey(byte[] transactionHash) => "withdrawUTXO".AsByteArray().Concat(transactionHash);
         private static byte[] OldWhitelistKey(byte[] assetID) => "oldNEP5Whitelist".AsByteArray().Concat(assetID);
-        private static byte[] NewWhitelistKey(byte[] assetID) => "newNEP5Whitelist".AsByteArray().Concat(assetID);
+        private static byte[] OldWhitelistSealedKey() => "oldNEP5WhitelistSealed".AsByteArray();
         private static byte[] DepositKey(Transaction txn) => "deposited".AsByteArray().Concat(txn.Hash);
         private static byte[] CancelAnnounceKey(byte[] offerHash) => "cancelAnnounce".AsByteArray().Concat(offerHash);
         private static byte[] WithdrawAnnounceKey(byte[] originator, byte[] assetID) => "withdrawAnnounce".AsByteArray().Concat(originator).Concat(assetID);
