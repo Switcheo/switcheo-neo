@@ -1478,8 +1478,7 @@ namespace switcheo
             // Verify that deposit is authorized
             if (!CheckTradeWitnesses(originator)) return false;
             if (GetState() != Active) return false;
-            // Check address and amounts
-            if (!IsAddressValid(originator)) return false;
+            // Check amount
             if (amount < 1) return false;
             // Update balances first
             var balanceChanges = NewBalanceChanges();
