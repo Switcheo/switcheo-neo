@@ -1738,7 +1738,7 @@ namespace switcheo
 
         // Helpers
         private static StorageContext Context() => Storage.CurrentContext;
-        private static BigInteger AmountToOffer(Offer o, BigInteger amount) => (o.OfferAmount * amount) / o.WantAmount;
+
         private static bool IsTradingFrozen() => Storage.Get(Context(), "state") == Inactive;
 
         private static bool IsAllInputsUnreserved(TransactionInput[] inputs)
