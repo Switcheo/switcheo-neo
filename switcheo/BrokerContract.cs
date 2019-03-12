@@ -319,7 +319,7 @@ namespace switcheo
                         if (i.ScriptHash == ExecutionEngine.ExecutingScriptHash) return false;
                     }
                     // Only allow claims to be sent to fee address for manual dispersal
-                    if (outputs.Length > 1 || outputs[0].ScriptHash != GetFeeAddress()) return false;
+                    if (outputs.Length != 1 || outputs[0].ScriptHash != GetFeeAddress()) return false;
                     return true;
                 }
 
