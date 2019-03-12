@@ -340,7 +340,7 @@ namespace switcheo
                     // Check that this is a valid SystemAsset withdrawal
                     ulong amount = (ulong)outputs[0].Value;
                     if (amount == 0 || outputs.Length > 2 || isWithdrawingNEP5) return false;
-
+0
                     // Check that inputs are not already reserved (We must not re-use a UTXO that is already reserved)
                     if (!IsAllInputsUnreserved(inputs)) return false;
 
@@ -697,7 +697,6 @@ namespace switcheo
 
         private static AnnouncementInfo GetAnnouncedWithdrawal(byte[] withdrawingAddr, byte[] assetID)
         {
-
             var announce = Storage.Get(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
             if (announce.Length == 0) return new AnnouncementInfo(); // not announced
             return (AnnouncementInfo)announce.Deserialize();
@@ -1596,15 +1595,6 @@ namespace switcheo
                 var outputs = currentTxn.GetOutputs();
                 BigInteger amount = outputs[0].Value;
 
-                bool withdrawalAnnounced = IsWithdrawalAnnounced(withdrawingAddr, assetID, amount);
-
-                // Only pass if withdraw coordinator signed or withdrawal is announced
-                if (!(Runtime.CheckWitness(GetWithdrawCoordinatorAddress()) || withdrawalAnnounced))
-                {
-                    Runtime.Log("Withdraw coordinator witness missing or withdrawal unannounced");
-                    return false;
-                }
-
                 // Check again that: amount > 0, balance enough and whether there is an existing withdraw as withdraw can only happen 1 at a time for each asset
                 // Because things might have changed between verification phase and application phase
                 if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount))
@@ -1613,16 +1603,17 @@ namespace switcheo
                     return false;
                 }
 
+                // Check that the transaction is signed by the withdraw coordinator, or...
+                if (!Runtime.CheckWitness(GetWithdrawCoordinatorAddress()))
+                {
+                    // If not signed by withdraw coordinator it must be pre-announced
+                    if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                    Storage.Delete(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
+                }
+
                 // Attempt to reduce contract balance
                 var balanceChanges = NewBalanceChanges();
                 balanceChanges.ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal);
-
-                // Clear withdrawing announcement by user for this asset if any withdrawal is successful because it would mean that withdrawal is working correctly and exchange is in action
-                var key = WithdrawAnnounceKey(withdrawingAddr, assetID);
-                if (key.Length > 0)
-                {
-                    Storage.Delete(Context(), key);
-                }
 
                 // Reserve the transaction hash for the user
                 Storage.Put(Context(), WithdrawalAddressKey(currentTxn.Hash), withdrawingAddr);
@@ -1650,6 +1641,7 @@ namespace switcheo
                         // If not signed by withdraw coordinator it must be pre-announced + signed by the user
                         if (!Runtime.CheckWitness(withdrawingAddr)) return false;
                         if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                        Storage.Delete(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
                     }
 
                     // Check old whitelist
