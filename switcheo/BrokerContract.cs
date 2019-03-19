@@ -1051,7 +1051,6 @@ namespace switcheo
                 {
                     // Reduce fees here from contract balance separately as it is a different asset type
                     balanceChanges.ReduceBalance(fillerAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeGive);
-                    EmitTransferred(fillerAddress, takerFeeAssetID, 0 - takerFeeAmount, ReasonTakerFeeGive);
                 }
                 if (burnTakerFee)
                 {
@@ -1145,7 +1144,7 @@ namespace switcheo
             Offer offer = GetOffer(offerHash);
             if (offer.MakerAddress == Empty) return false;
 
-            // Check that transaction is signed by the canceller or trading is frozen
+            // Check that transaction is signed by the canceller
             if (!Runtime.CheckWitness(offer.MakerAddress)) return false;
 
             Storage.Put(Context(), CancelAnnounceKey(offerHash), Runtime.Time);
@@ -1588,8 +1587,9 @@ namespace switcheo
                 var outputs = currentTxn.GetOutputs();
                 BigInteger amount = outputs[0].Value;
 
-                // Check again that: amount > 0, balance enough and whether there is an existing withdraw as withdraw can only happen 1 at a time for each asset
-                // Because things might have changed between verification phase and application phase
+                // Check again that: amount > 0, balance enough and whether there is an existing withdraw
+                // because things might have changed between verification phase and application phase
+                // e.g. another transaction mark withdraw reduced so much balance that this mark withdrawal do not have enough balance left to reduce
                 if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount))
                 {
                     Runtime.Log("Verify withdrawal failed");
