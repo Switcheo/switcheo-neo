@@ -504,19 +504,19 @@ namespace switcheo
                 }
                 if (operation == "burnTokens") // (originator, assetID, amountToBurn)
                 {
-                    if (GetState() == Pending) return false;
+                    if (GetState() != Active) return false;
                     if (args.Length != 4) return false;
                     return BurnTokens((byte[])args[0], (byte[])args[1], (BigInteger)args[2], (byte[])args[3]);
                 }
                 if (operation == "sweepDustTokens") // (originator, counterparty, dustAssetIDs, dustAmounts, combinedAssetID, combinedAmount)
                 {
-                    if (GetState() == Pending) return false;
+                    if (GetState() != Active) return false;
                     if (args.Length != 6) return false;
                     return SweepDustTokens((byte[])args[0], (byte[])args[1], (byte[][])args[2], (BigInteger[])args[3], (byte[])args[4], (BigInteger)args[5]);
                 }
-                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, secondsToExpire, feeAssetID, feeAmount, burnTokens)
+                if (operation == "createAtomicSwap") // (makerAddress, takerAddress, assetID, amount, hashOfSecret, expiryTime, feeAssetID, feeAmount, burnTokens)
                 {
-                    if (GetState() == Pending) return false;
+                    if (GetState() != Active) return false;
                     if (args.Length != 9) return false;
                     return CreateAtomicSwap((byte[])args[0], (byte[])args[1], (byte[])args[2], (BigInteger)args[3], (byte[])args[4], (BigInteger)args[5], (byte[])args[6], (BigInteger)args[7], (bool)args[8]);
                 }
@@ -534,7 +534,7 @@ namespace switcheo
                 }
                 if (operation == "approveSpender") // (address, spender)
                 {
-                    if (GetState() == Pending) return false;
+                    if (GetState() != Active) return false;
                     if (args.Length != 2) return false;
                     return ApproveSpender((byte[])args[0], (byte[])args[1]);
                 }
@@ -616,6 +616,15 @@ namespace switcheo
                     return RemoveSpender((byte[])args[0]);
                 }
             }
+
+            // if (Runtime.Trigger == TriggerType.ApplicationR)
+            // {
+            //     // Accept all system assets
+            //     var received = Received();
+            //     // Mark deposit
+            //     var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+            //     Storage.Put(Context(), DepositKey(currentTxn), 1);
+            // }
 
             return true;
         }
@@ -833,8 +842,7 @@ namespace switcheo
             if (!IsAddressValid(spender)) return false;
             if (!Runtime.CheckWitness(address)) return false;
             // Check spender is whitelisted
-            var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
-            if (isWhitelisted != Active) return false;
+            if (Storage.Get(Context(), WhitelistedSpenderKey(spender)) != Active) return false;
             Storage.Put(Context(), ApproveSpenderKey(address, spender), Active);
             EmitSpenderApproved(address, spender);
             return true;
@@ -851,8 +859,7 @@ namespace switcheo
             if (!IsAddressValid(spender)) return false;
             if (!Runtime.CheckWitness(address)) return false;
             // Check spender must be removed from the whitelist
-            var isWhitelisted = Storage.Get(Context(), WhitelistedSpenderKey(spender));
-            if (isWhitelisted == Active) return false;
+            if (Storage.Get(Context(), WhitelistedSpenderKey(spender)) == Active) return false;
 
             Storage.Delete(Context(), ApproveSpenderKey(address, spender));
             EmitSpenderRescinded(address, spender);
@@ -876,11 +883,9 @@ namespace switcheo
         {
             if (!IsAddressValid(from) || !IsAddressValid(to)) return false;
             if (amount < 0) return false;
-            if (!Runtime.CheckWitness(from)) return false;
 
             // Check from address approved spender
-            var isApproved = Storage.Get(Context(), ApproveSpenderKey(from, callingScriptHash));
-            if (isApproved != Active) return false;
+            if (Storage.Get(Context(), ApproveSpenderKey(from, callingScriptHash)) != Active) return false;
 
             var balanceChanges = NewBalanceChanges();
             balanceChanges.ReduceBalance(from, assetID, amount, decreaseFromReason);
@@ -914,15 +919,13 @@ namespace switcheo
             // Check fees
             if (offer.MakerFeeAvailableAmount < 0) return false;
 
-            // Check that there are enough assets to be deducted for fees (This should still be true even if fee asset is same as offer asset)
-            if (GetBalance(offer.MakerAddress, offer.MakerFeeAssetID) < offer.MakerFeeAvailableAmount) return false;
-
             var balanceChanges = NewBalanceChanges();
             // Reduce available balance for the offered asset and amount
             balanceChanges.ReduceBalance(offer.MakerAddress, offer.OfferAssetID, offer.OfferAmount, ReasonMakerGive);
 
+            var deductFeesSeparately = offer.MakerFeeAssetID != offer.WantAssetID;
             // Reserve fees from the maker fee asset only if it is different from want asset
-            if (offer.MakerFeeAvailableAmount > 0 && offer.MakerFeeAssetID != offer.WantAssetID)
+            if (deductFeesSeparately && offer.MakerFeeAvailableAmount > 0)
             {
                 // Reduce fees here separately as it is a different asset type
                 balanceChanges.ReduceBalance(offer.MakerAddress, offer.MakerFeeAssetID, offer.MakerFeeAvailableAmount, ReasonMakerFeeGive);
@@ -1322,7 +1325,7 @@ namespace switcheo
             if (swap.FeeAmount < _cancelFeeAmount) return false;
 
             // Check that cancelFeeAmount is not < 0
-            if (_cancelFeeAmount != null && _cancelFeeAmount < 0) return false;
+            if (_cancelFeeAmount < 0) return false;
 
             var deductFeesSeparately = swap.FeeAssetID != swap.AssetID;
 
@@ -1608,6 +1611,7 @@ namespace switcheo
                 // Attempt to reduce contract balance
                 var balanceChanges = NewBalanceChanges();
                 balanceChanges.ReduceBalance(withdrawingAddr, assetID, amount, ReasonWithdrawal);
+                ExecuteBalanceChanges(balanceChanges);
 
                 // Reserve the transaction hash for the user
                 Storage.Put(Context(), WithdrawalAddressKey(currentTxn.Hash), withdrawingAddr);
@@ -1624,19 +1628,9 @@ namespace switcheo
                 {
                     // Check withdrawal validity
                     var amount = GetWithdrawalAmount(currentTxn);
-                    if (amount <= 0) return false;
 
-                    // Check that the withdrawing address has sufficient contract balance
+                    // Check that the withdrawing address has sufficient contract balance and amount > 0
                     if (!VerifyWithdrawalValid(withdrawingAddr, assetID, amount)) return false;
-
-                    // Check that the transaction is signed by the withdraw coordinator, or...
-                    if (!Runtime.CheckWitness(GetWithdrawCoordinatorAddress()))
-                    {
-                        // If not signed by withdraw coordinator it must be pre-announced + signed by the user
-                        if (!Runtime.CheckWitness(withdrawingAddr)) return false;
-                        if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
-                        Storage.Delete(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
-                    }
 
                     // Check old whitelist
                     if (IsWhitelistedOldNEP5(assetID))
@@ -1649,6 +1643,15 @@ namespace switcheo
                     {
                         // New-style NEP-5 transfers or arbitrary invokes SHOULD NOT pass this contract's witness checks
                         if (Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
+                    }
+
+                    // Check that the transaction is signed by the withdraw coordinator, or...
+                    if (!Runtime.CheckWitness(GetWithdrawCoordinatorAddress()))
+                    {
+                        // If not signed by withdraw coordinator it must be pre-announced + signed by the user
+                        if (!Runtime.CheckWitness(withdrawingAddr)) return false;
+                        if (!IsWithdrawalAnnounced(withdrawingAddr, assetID, amount)) return false;
+                        Storage.Delete(Context(), WithdrawAnnounceKey(withdrawingAddr, assetID));
                     }
 
                     // Attempt to reduce contract balance
@@ -1666,6 +1669,8 @@ namespace switcheo
                 }
                 else
                 {
+                    // Check for contract witness so we know contract has passed verification
+                    if (!Runtime.CheckWitness(ExecutionEngine.ExecutingScriptHash)) return false;
                     var inputs = currentTxn.GetInputs();
                     var references = currentTxn.GetReferences();
 
