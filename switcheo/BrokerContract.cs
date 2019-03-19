@@ -622,10 +622,7 @@ namespace switcheo
             if (Runtime.Trigger == TriggerType.ApplicationR)
             {
                 // Accept all system assets
-                var received = Received();
-                // Mark deposit
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                Storage.Put(Context(), DepositKey(currentTxn), 1);
+                return Received();
             }
 
             return false;
@@ -1431,11 +1428,7 @@ namespace switcheo
             else
             {
                 // Else just assume it is system asset and accept all system assets sent to the contract
-                var received = Received();
-                // Mark deposit
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                Storage.Put(Context(), DepositKey(currentTxn), 1);
-                return received;
+                return Received();
             }
         }
 
@@ -1491,9 +1484,10 @@ namespace switcheo
             var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
             var outputs = currentTxn.GetOutputs();
             var references = currentTxn.GetReferences();
+            var depositKey = DepositKey(currentTxn);
 
             // Check if existing deposit flag is present
-            if (Storage.Get(Context(), DepositKey(currentTxn)).Length > 0) return false;
+            if (Storage.Get(Context(), depositKey).Length > 0) return false;
 
             // Don't deposit if this is a withdrawal
             var coordinatorAddress = GetCoordinatorAddress();
@@ -1538,6 +1532,9 @@ namespace switcheo
             }
 
             ExecuteBalanceChanges(balanceChanges);
+
+            // Mark deposit
+            Storage.Put(Context(), depositKey, 1);
 
             return true;
         }
