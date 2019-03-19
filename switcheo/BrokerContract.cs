@@ -617,16 +617,18 @@ namespace switcheo
                 }
             }
 
-            // if (Runtime.Trigger == TriggerType.ApplicationR)
-            // {
-            //     // Accept all system assets
-            //     var received = Received();
-            //     // Mark deposit
-            //     var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-            //     Storage.Put(Context(), DepositKey(currentTxn), 1);
-            // }
+            // Accept all payments to contract
+            if (Runtime.Trigger == TriggerType.VerificationR) return true;
+            if (Runtime.Trigger == TriggerType.ApplicationR)
+            {
+                // Accept all system assets
+                var received = Received();
+                // Mark deposit
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                Storage.Put(Context(), DepositKey(currentTxn), 1);
+            }
 
-            return true;
+            return false;
         }
 
         /***********
@@ -1416,16 +1418,7 @@ namespace switcheo
         private static bool Deposit(byte[] originator, byte[] assetID, BigInteger amount)
         {
             // Check asset lengths
-            if (IsSystemAsset(assetID))
-            {
-                // Accept all system assets
-                var received = Received();
-                // Mark deposit
-                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
-                Storage.Put(Context(), DepositKey(currentTxn), 1);
-                return received;
-            }
-            else if (IsToken(assetID))
+            if (IsToken(assetID))
             {
                 // Update balances first
                 if (!ReceivedNEP5(originator, assetID, amount)) return false;
@@ -1435,9 +1428,15 @@ namespace switcheo
 
                 return true;
             }
-
-            // Unknown asset category
-            return false;
+            else
+            {
+                // Else just assume it is system asset and accept all system assets sent to the contract
+                var received = Received();
+                // Mark deposit
+                var currentTxn = (Transaction)ExecutionEngine.ScriptContainer;
+                Storage.Put(Context(), DepositKey(currentTxn), 1);
+                return received;
+            }
         }
 
         private static bool DepositFrom(byte[] originator, byte[] assetID, BigInteger amount)
