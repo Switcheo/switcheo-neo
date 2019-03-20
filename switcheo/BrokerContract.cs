@@ -994,32 +994,8 @@ namespace switcheo
                 return false;
             }
 
-            // Get filler balances needed
-            var fillerBalances = (Map<byte[], BigInteger>)Storage.Get(Context(), BalanceKey(fillerAddress)).Deserialize();
-
-            // Check that there is enough balance to reduce for filler
-            if (!fillerBalances.HasKey(offer.WantAssetID))
-            {
-                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnFiller);
-                return false;
-            }
-
-            var fillerOfferAssetBalance = fillerBalances[offer.WantAssetID];
-            if (fillerOfferAssetBalance < amountToFill)
-            {
-                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnFiller);
-                return false;
-            }
-
             // Check if we should deduct fees separately from the taker amount
             bool deductTakerFeesSeparately = takerFeeAssetID != offer.OfferAssetID;
-
-            // Check that there is enough balance in native fees if using native fees
-            if (deductTakerFeesSeparately && takerFeeAmount > 0 && fillerBalances.HasKey(takerFeeAssetID) && fillerBalances[takerFeeAssetID] < takerFeeAmount)
-            {
-                EmitFailed(fillerAddress, offerHash, amountToTake, takerFeeAssetID, takerFeeAmount, ReasonNotEnoughBalanceOnNativeToken);
-                return false;
-            }
 
             // Check that maker fee does not exceed remaining amount that can be deducted as maker fees
             if (offer.MakerFeeAvailableAmount < makerFeeAmount)
@@ -1044,6 +1020,7 @@ namespace switcheo
             var amountToTakeAfterFees = deductTakerFeesSeparately ? amountToTake : amountToTake - takerFeeAmount;
             balanceChanges.IncreaseBalance(fillerAddress, offer.OfferAssetID, amountToTakeAfterFees, ReasonTakerReceive);
 
+            var feeAddress = GetFeeAddress();
             // Move fees
             if (takerFeeAmount > 0)
             {
@@ -1060,7 +1037,7 @@ namespace switcheo
                 else
                 {
                     // Only increase fee address balance if not burning
-                    balanceChanges.IncreaseBalance(GetFeeAddress(), takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
+                    balanceChanges.IncreaseBalance(feeAddress, takerFeeAssetID, takerFeeAmount, ReasonTakerFeeReceive);
                 }
             }
             if (makerFeeAmount > 0)
@@ -1076,7 +1053,7 @@ namespace switcheo
                 else
                 {
                     // Only increase fee address balance if not burning
-                    balanceChanges.IncreaseBalance(GetFeeAddress(), offer.MakerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
+                    balanceChanges.IncreaseBalance(feeAddress, offer.MakerFeeAssetID, makerFeeAmount, ReasonMakerFeeReceive);
                 }
             }
 
