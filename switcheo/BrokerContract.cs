@@ -132,6 +132,7 @@ namespace switcheo
         private static readonly byte[] GasAssetID = { 231, 45, 40, 105, 121, 238, 108, 177, 183, 230, 93, 253, 223, 178, 227, 132, 16, 11, 141, 20, 142, 119, 88, 222, 66, 228, 22, 139, 113, 121, 44, 96 };
         private static readonly byte[] MctAssetID = { 63, 188, 96, 124, 18, 194, 135, 54, 52, 50, 36, 164, 180, 216, 245, 19, 165, 194, 124, 168 };
         // private static readonly byte[] MctAssetID = { 161, 47, 30, 104, 24, 178, 176, 62, 14, 249, 6, 237, 39, 46, 18, 9, 144, 116, 169, 38 };
+        private static readonly byte[] NncAssetID = {  };
         private static readonly byte[] WithdrawArgs = { 0x00, 0xc1, 0x08, 0x77, 0x69, 0x74, 0x68, 0x64, 0x72, 0x61, 0x77 }; // PUSH0, PACK, PUSHBYTES8, "withdraw" as bytes
 
         //* Reason Code for balance changes *//
@@ -190,6 +191,13 @@ namespace switcheo
             public byte[] MakerFeeAssetID;
             public BigInteger MakerFeeAvailableAmount;
             public byte[] Nonce;
+        }
+
+        private struct TransferInfo
+        {
+            public byte[] from;
+            public byte[] to;
+            public BigInteger value;
         }
 
         private static Map<byte[], BalanceChange[]> NewBalanceChanges()
@@ -457,6 +465,11 @@ namespace switcheo
                 {
                     if (args.Length != 3) return false;
                     return DepositFromNonStandard((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
+                }
+                if (operation == "depositFromTransferInfo") // (originator, assetID, amount)
+                {
+                    if (args.Length != 3) return false;
+                    return DepositFromTransferInfo((byte[])args[0], (byte[])args[1], (BigInteger)args[2]);
                 }
                 if (operation == "onTokenTransfer") // deposit for MCT contract only (from, to, amount)
                 {
@@ -1455,6 +1468,27 @@ namespace switcheo
 
             // Execute deposit to our contract (ExecutionEngine.ExecutingScriptHash)
             TransferFromNonStandardNEP5(originator, ExecutionEngine.ExecutingScriptHash, assetID, amount);
+
+            return true;
+        }
+
+        private static bool DepositFromTransferInfo(byte[] originator, byte[] assetID, BigInteger amount)
+        {
+            // We only allow NNC script hash as this is not a recommended 
+            // transfer method and cannot work without a whitelist
+            if (assetID != NncAssetID) return false;
+
+            // Update balances first
+            if (!ReceivedNEP5(originator, assetID, amount)) return false;
+
+            // Check transfer info
+            var args = new object[] { ((Transaction)ExecutionEngine.ScriptContainer).Hash };
+            var contract = (NEP5Contract)assetID.ToDelegate();
+
+            var transferInfo = (TransferInfo)contract("getTxInfo", args);
+            if (transferInfo.from != originator) throw new Exception("Invalid from address");
+            if (transferInfo.to != ExecutionEngine.ExecutingScriptHash) throw new Exception("Invalid to address");
+            if (transferInfo.value != amount) throw new Exception("Invalid amount");
 
             return true;
         }
