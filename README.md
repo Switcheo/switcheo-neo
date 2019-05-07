@@ -1,93 +1,151 @@
-# Switcheo
+# Switcheo (NEO Non-Custodial Decentralized Exchange)
 
-An implementation of a NEO decentralized exchange
+Smart contract for a non-custodial decentralized exchange on the NEO blockchain.
 
-## Manual Withdrawal from V2 Contract
+This smart contract is live and currently being used on [Switcheo Exchange](https://www.switcheo.exchange)
 
-[Read wiki here](https://github.com/ConjurTech/switcheo/wiki/Manual-Withdraws-(Direct-from-V2-Smart-Contract))
+Unlike a fully on-chain DEX, this contract relies on a 3rd party off-chain order matching system. Order matching and balances can be settled immediately off-chain, allowing instantaneous feedback to the user without waiting for blockchain settlements. This allows a seamless experience for the user trading while maintaining a non-custodial nature of a DEX.
 
-# NOTE: The README below is outdated and refers to V1 Contract and will be updated soon to better reflect the V2 contract contents
+## Safety Features
 
-## Usage
+Both the coodinator and user signature is required for all trade related transactions.
+In the event that the exchange has been compromised and can no longer be trusted, users can opt to manually cancel and withdraw their funds via an in built escape hatch without the need of the coordinator's signature.
 
-There are 4 main operations for this DApp:
+*Guide to manual cancellations and withdrawals: [Read this wiki](https://github.com/Switcheo/switcheo-neo/wiki/Manual-Withdraws-(Direct-from-V2-Smart-Contract))*
 
-- makeOffer
+## Initialization
 
-    This allows users to make a asset swap offer on the contract.
+This contract must be initialized with 2 valid coordinator addresses that the contract owner owns:
 
-    The params required are:
+- Trading Coordinator: Order related functions like making/filling an order must be signed by both the user and the trading coordinator.
+- Withdrawal Coordinator: Coordinated withdrawals must be signed by the withdrawal coordinator.
 
-    1. script hash of the offer maker (invoking user)
-    2. script hash of the asset being offered
-    3. amount of asset being offered
-    4. script hash of the asset wanted in return
-    5. amount of asset being wanted
+### Instructions
 
-    SystemAssets must be attached if they are part of the fill.
+- Change [hard coded](https://github.com/Switcheo/switcheo-neo/blob/a6f3d27dddd38896002b90615ad193d5fb62d568/switcheo/BrokerContract.cs#L104) owner address in the contract to an address you own
+  - *Note: ALL transactions that invoke owner functions must be signed by this address*
+- [Deploy the contract](https://docs.neo.org/en-us/sc/quickstart/deploy-invoke.html) to a NEO network (Mainnet, Testnet or your own Private net)
+- Initialize the contract
+  - Invoke `initialize` with the following params:
+    1. fee script hash
+    2. coordinator script hash
+    3. withdraw coordinator script hash
+- Whitelist [Old NEP-5 tokens](#differentiation-between-old-vs-new-nep-5-in-this-contract)
+  - Invoke `addToWhitelist` with the following params:
+    - NEP-5 asset script hash
 
-    Once invoked, the offered amount will be transferred to the smart contract, and the offer will be placed on the blockchain for anyone with the corresponding assets to fill.
+## Features
 
-    NEP-5 tokens and SystemAssets are the currently supported asset types.
+### Main operations
 
-- fillOffer
+- `deposit`
 
-    This allows users to fill an offer on the contract.
+    Make an asset deposit to the contract. Once invoked, the amount will be transferred to the smart contract, and the balance will be on the blockchain to be used in other operations of the smart contract. NEP-5 tokens and SystemAssets are the only supported asset types. SystemAssets must be attached as part of the transaction if it is the asset being deposited
 
-    The params required are:
+    Params required:
 
-    1. script hash of the offer filler (invoking user)
-    2. offer hash of the offer to be filled
-    3. the amount offered that should be filled
+    1. `originator` - Script hash of the user making the deposit.
+    2. `assetID` - Script hash of the asset to be deposited.
+    3. `amount` - Amount of asset to deposit.
 
-    SystemAssets must be attached if they are part of the fill.
+- `makeOffer`
 
-    Once invoked, the offer corresponding to the second `arg` will be filled. Partial filling is possible. 
+    This allows users to make a offer on the contract by specifying the offer amount and how much of the other asset the user wants in return. Once invoked, the offered amount will reduced from the contract balance of the user and the offer will be placed on the blockchain for anyone with the corresponding assets to fill.
 
-    Amounts will be transferred to the maker and filler for withdrawal in a second transaction.
+    Params required:
 
-- cancelOffer
+    1. `makerAddress` - Script hash of the user making the offer.
+    2. `offerAssetID` - Script hash of the offered asset.
+    3. `offerAmount` - Amount to offer.
+    4. `wantAssetID` - Script hash of the wanted asset.
+    5. `wantAmount` - Amount wanted in return.
+    6. `makerFeeAssetID` - Script hash of asset to use as maker fee.
+    7. `makerFeeAvailableAmount` - Amount of maker fees reserved to be deducted from this offer when offer is filled.
+    8. `nonce` - A nonce to differentiate between offers so that no 2 offers created are the same even if all the parameters are the same.
 
-    This allows a user to cancel a previous offer that has not been completely filled.
+- `fillOffer`
 
-    The params required are:
+    Fill an existing offer on the contract. Once invoked, the offer corresponding to the second offerHash will be filled. Partial filling is possible. Both the filler and maker will receive their cut in the trade in their contract balance. A fee can be optionally charged and deducted from the taker/maker within this trade. If the fee asset provided is the same as the offered asset, it will be deducted from the user's cut in the trade else it will be deducted from the user's contract balance.
 
-    1. offer hash to be cancelled
+    Params required:
 
-    Once invoked, the offer will be cancelled and any remaining balance will be credited to the user balance for withdrawal in a second transaction.
+    1. `fillerAddress` - Script hash of the user making the fill.
+    2. `offerHash` - Offer hash of the offer to fill.
+    3. `amountToTake` - Amount of the offer's offered asset to take from the offer.
+    4. `takerFeeAssetID` - Script hash of the taker fee asset to be charged in this trade.
+    5. `takerFeeAmount` - Amount of taker fee to deduct from this fill.
+    6. `burnTakerFee` - Choose to burn the taker fee in the smart contract instead of sending to fee address.
+    7. `makerFeeAmount` - Amount of maker fee to deduct from the remaining reserved amount for maker fee in the offer.
+    8. `burnMakerFee` - Choose to burn the maker fee in the smart contract instead of sending to fee address
 
-- withdrawAssets
+- `cancelOffer`
 
-    This allows users to withdraw their balance in the smart contract.
+    Cancel a previous offer that has not been completely filled. Once invoked, the offer will be cancelled and any remaining balance will be credited to the user's contract balance.
 
-    The params required (NEP-5) are:
+    Params required:
 
-    1. script hash of the user to withdraw balance from
-    2. script hash of the asset to withdraw
-    3. amount of asset to withdraw
+    1. `offerHash` - Offer hash to be cancelled.
 
-    For SystemAssets, params are not required, but the transaction must be invoked with a TransactionAttribute of Usage `0xd1` and Data `0x01`. We chose an implementation which uses transaction attributes instead of "method arguments" to prevent double withdrawals before main net deployment.
+- `withdraw`
 
-    Our implementation currently does not allow a transfer trading of this balance and this operation must always be called to make use of the swapped asset.
+    Withdraw user's contract balance in the smart contract to the user's wallet. For withdrawal, params are not required, but the transaction must be invoked with required transaction attributes. System assets require a [2-step withdrawal process](#why-2-step-withdrawals-in-system-assets) while NEP-5 only require a single step.
 
-### Offer listing
+    Transaction attributes:
 
-In order to find offers on the blockchain, list traversal can be used. By querying the contract's storage with a concatenation of the offered and wanted asset script hashes, the head of the list can be obtained.
+    1. `0xa1` - Required - The withdrawal stage either `0x50` (mark system asset withdrawal) or `0x51` (finish withdrawal).
+    2. `0xa2` - Required only if NEP-5 - Script hash of the NEP-5 asset to withdraw
+    3. `0xa3` - Required only if System Assets - Script hash of the system asset to withdraw
+    4. `0xa4` - Required - Script hash to the user address to withdraw.
+    5. `0xa5` - Required - Amount of asset to withdraw.
+    6. `0x20` - Required only if System Assets or old NEP-5 - Additional witness for verification. Either the withdrawal script hash for system assets or the contract's script hash for [Old NEP-5 tokens](#differentiation-between-old-vs-new-nep-5-in-this-contract). New tokens do not need contract witness.
 
-This will give the offerHash of the latest offer on the trading pair. This allows the offer information to be queried and deserialized. Each offer contains the offerHash of the next offer.
+### Other operations
 
-In this way, the list can be traversed entirely, and a order book can be displayed / cached.
+- `depositFrom` - Same as deposit but uses the transferFrom function of NEP-5 instead of transfer.
+- `depositFromNonStandard` - Same as depositFrom but for tokens who implemented transferFrom in a non standard way.
+- `onTokenTransfer` - Same as deposit but for use by MCT contract only.
+- `burnTokens` - Send tokens to smart contract without increasing any balance effectively burning the tokens.
+- `sweepDustTokens` - Sweep multiple small balances into 1 asset's balance.
 
+### Atomic swap operations
 
-## Example
+- `createAtomicSwap` - Creates an atomic swap offer.
+- `executeAtomicSwap` - Execute a verified atomic swap to unlock funds to contract balance.
+- `cancelAtomicSwap` - Cancels an atomic swap offer after it has expired.
 
-Test on beta client at V2 Testnet at the bottom right https://beta.switcheo.exchange
-Or trade on directly on mainnet https://www.switcheo.exchange
+### Spender contract operations
 
-## Future work
+- `approveSpender` - Approves a 3rd party spender contract to spend this contract's balance via spendFrom
+- `rescindApproval` - Unapprove an approved spender contract
+- `spendFrom` - Spend a user's contract balance. Only a contract that has been approved by the user is able to use this.
 
-There remains certain TODOs that are incomplete in V2.
+### Manual user operations
 
-- Usage of DynamicCall
+- `announceCancel` - Announce for a cancel so that offer can be cancelled without a coordinator signature after a delay time has been met.
+- `announceWithdraw` - Announce for a withdraw so that asset can be withdrawn without a withdrawer coordinator signature after a delay time has been met.
 
-  We hardcoded all known NEP-5 tokens in our contract as `Appcall` can only be done statically at the moment. We hope to push for the implementation of `DynamicCall` in the vm / compiler so that the contract does not need to be updated.
+### Owner operations
+
+- `freezeTrading` - Freeze makeOffer and fillOffer opetaions.
+- `unfreezeTrading` - Unfreeze makeOffer and fillOffer opetaions.
+- `setAnnounceDelay` - Set the minimum amount of wait time users need to wait after manually announcing a cancellation or withdraw via the smart contract.
+- `setCoordinatorAddress` - Sets the coordinator script hash.
+- `setWithdrawCoordinatorAddress` - Sets the withdrawing coordinator script hash.
+- `setFeeAddress` - Sets the fee script hash that will receive the fees from making or filling an offer.
+- `addToWhitelist` - Adds an old standard NEP5 token to the whitelist so it can be withdrawn.
+- `removeFromWhitelist` - Removes an added NEP5 token from the whitelist.
+- `sealWhitelist` - Seals the whitelist once all NEP5 tokens will be following the new standard.
+- `addSpender` - Adds a spender contract so that users can choose to approve this spender to spend their contract.
+- `removeSpender` - Removes a previously added spender contract.
+
+## More information
+
+### Differentiation between Old vs New NEP-5 in this contract
+
+*Old NEP-5 tokens in this contract refers to tokens that does not follow [the standard NEP-5 interface](https://github.com/neo-project/proposals/blob/master/nep-5.mediawiki#transfer). Namely this line: `The function SHOULD check whether the from address equals the caller contract hash. If so, the transfer SHOULD be processed; If not, the function SHOULD use the SYSCALL Neo.Runtime.CheckWitness to verify the transfer.`*
+
+*As of this writing, most tokens on the main network are still following the old standard except for a few tokens like MCT and FTWX. Please do your own due dilligence before adding tokens to the whitelist.*
+
+### Why 2 step withdrawals in system assets
+
+We chose an implementation which uses transaction attributes instead of "method arguments" to prevent double withdrawals that can happen between the verification phase and application phase of NEO.
