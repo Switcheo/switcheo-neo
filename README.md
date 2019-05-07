@@ -11,7 +11,7 @@ Unlike a fully on-chain DEX, this contract relies on a 3rd party off-chain order
 Both the coodinator and user signature is required for all trade related transactions.
 In the event that the exchange has been compromised and can no longer be trusted, users can opt to manually cancel and withdraw their funds via an in built escape hatch without the need of the coordinator's signature.
 
-*Guide to manual cancellations and withdrawals: [Read this wiki](https://github.com/Switcheo/switcheo-neo/wiki/Manual-Withdraws-(Direct-from-V2-Smart-Contract))*
+*Guide to manual cancellations and withdrawals: [Read this wiki](https://github.com/Switcheo/switcheo-neo/wiki/Manual-Withdraws-(Direct-from-V3-Smart-Contract))*
 
 ## Initialization
 
