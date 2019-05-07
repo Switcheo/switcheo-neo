@@ -1,4 +1,4 @@
-# Switcheo (NEO Non-Custodial Decentralized Exchange)
+# Switcheo (NEO)
 
 Smart contract for a non-custodial decentralized exchange on the NEO blockchain.
 
